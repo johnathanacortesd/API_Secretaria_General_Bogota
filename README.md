@@ -74,7 +74,7 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
 
 ## Archivos
 
-- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.1)
+- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.2)
 - `resumen_informe.py` — lectura de primera hoja, conteos y redacción
 - `clientes/` — solo el perfil de este cliente
 - `analyzer_tono_tema.py`, `pipeline.py`, `ai_analyzer.py`,
@@ -95,3 +95,14 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
   letras ya cuentan en título y en Contexto analizado (antes se exigían
   3 caracteres y "DP" se caía); los bordes de palabra evitan que "DP"
   cuente dentro de otra palabra.
+
+## Novedades v1.2 (2026-10-30, pendiente de push)
+
+- Aviso de cliente en todas las pantallas: en la pantalla de contraseña
+  ("Sistema de Limpieza y Análisis") aparece "📍 App de: Secretaría
+  General de la Alcaldía de Bogotá", y tras ingresar queda un aviso
+  permanente con el mismo texto (fuera del contenedor que se borra al
+  procesar, así que también se ve durante el procesamiento y en la vista
+  de resultados) y en el pie de página. Las dos apps comparten diseño y
+  título de sistema, por eso el aviso es explícito y no depende solo del
+  encabezado.

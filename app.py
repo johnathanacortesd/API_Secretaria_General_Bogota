@@ -19,7 +19,12 @@ from pkl_classifier import PklClassifierError, load_sklearn_estimator
 from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.1"
+APP_VERSION = "v1.2"
+
+# v1.2: cliente fijo de este repo. Se muestra en la pantalla de
+# contraseña y en un aviso permanente tras ingresar, para que las
+# dos apps (mismo diseño, mismo título de sistema) nunca se confundan.
+CLIENTE_NOMBRE = "Secretaría General de la Alcaldía de Bogotá"
 
 # v4.51: sello del analizador que realmente corre en el contenedor. Se lee
 # del módulo del analizador (ya importado vía pipeline); si el despliegue
@@ -228,11 +233,12 @@ def check_password():
     if st.session_state.get("password_correct", False):
         return True
     configurada = bool(st.secrets.get("APP_PASSWORD"))
-    st.markdown("""
+    st.markdown(f"""
     <div class="auth-wrap">
         <div class="auth-icon">◈</div>
         <div class="auth-eyebrow">Acceso privado</div>
         <div class="auth-title">Sistema de Limpieza y Análisis</div>
+        <div style="margin-top:0.75rem;background:rgba(156,61,18,0.07);border:1px solid rgba(156,61,18,0.30);border-radius:10px;padding:0.6rem 0.9rem;font-weight:600;color:#9c3d12;">📍 App de: {CLIENTE_NOMBRE}</div>
         <div class="auth-sub">Ingresa la contraseña para continuar con el análisis de noticias.</div>
     </div>""", unsafe_allow_html=True)
     if not configurada:
@@ -449,6 +455,16 @@ def main():
     )
     load_custom_css()
     if not check_password(): return
+
+    # v1.2: aviso permanente del cliente, fuera de `ui` para que no
+    # se borre durante el procesamiento ni falte en resultados.
+    st.markdown(
+        '<div style="background:rgba(156,61,18,0.07);border:1px solid rgba(156,61,18,0.30);'
+        'border-radius:10px;padding:0.6rem 1rem;margin-bottom:1rem;">'
+        '📍 <strong>App de: {CLIENTE_NOMBRE}</strong>'
+        ' <span style="color:#57534e;">— Sistema de Limpieza y Análisis</span></div>',
+        unsafe_allow_html=True,
+    )
 
     _procesando = bool(st.session_state.get("procesando"))
 
@@ -1233,7 +1249,7 @@ def main():
     # El pie solo se muestra fuera del procesamiento.
     if not _procesando:
         st.markdown(
-            '<div class="footer">Estructuración y Limpieza · Johnathan Cortés ©</div>',
+            f'<div class="footer">{CLIENTE_NOMBRE} · Estructuración y Limpieza · Johnathan Cortés ©</div>',
             unsafe_allow_html=True
         )
 
