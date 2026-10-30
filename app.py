@@ -19,7 +19,7 @@ from pkl_classifier import PklClassifierError, load_sklearn_estimator
 from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.3"
+APP_VERSION = "v1.4"
 
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
@@ -510,9 +510,17 @@ def main():
                 except Exception:
                     _perfiles = []
                 _opciones_perfil = [_SIN_PERFIL] + [p["nombre"] for p in _perfiles]
+                # v1.4: por defecto sale el perfil de este cliente (no "Sin
+                # perfil"): en estos repos hay un solo perfil y su nombre es
+                # CLIENTE_NOMBRE; si algún día no estuviera, cae a "Sin perfil".
+                _indice_perfil_defecto = (
+                    _opciones_perfil.index(CLIENTE_NOMBRE)
+                    if CLIENTE_NOMBRE in _opciones_perfil else 0
+                )
                 sel_perfil = st.selectbox(
                     "Perfil de cliente",
                     _opciones_perfil,
+                    index=_indice_perfil_defecto,
                     help="Carga la configuración guardada del cliente. Puedes editar los campos "
                          "abajo antes de procesar; también puedes guardar la configuración actual "
                          "como un perfil nuevo desde 'Ajustes finos'.",
