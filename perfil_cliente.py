@@ -58,6 +58,8 @@ def _defaults() -> dict:
         "criterio_custom": "",
         "taxonomia": None,
         "guia_subtema": "",
+        "subtemas_fijos": [],
+        "clasificar_tipo_genero": False,
         "notas": "",
     }
 
@@ -76,6 +78,14 @@ def validar_perfil(data: dict) -> list:
     for campo in ("aliases", "voceros"):
         if not isinstance(d[campo], list) or any(not isinstance(x, str) for x in d[campo]):
             errores.append("'%s' debe ser una lista de textos" % campo)
+    sf = d["subtemas_fijos"]
+    if sf is not None:
+        if not isinstance(sf, list) or any(
+                not isinstance(r, dict) or not str(r.get("contiene") or "").strip()
+                or not str(r.get("subtema") or "").strip() for r in sf):
+            errores.append("'subtemas_fijos' debe ser una lista de {contiene, subtema} con textos no vacíos")
+    if not isinstance(d["clasificar_tipo_genero"], bool):
+        errores.append("'clasificar_tipo_genero' debe ser true/false")
     tax = d["taxonomia"]
     if tax is not None:
         if not isinstance(tax, dict) or not isinstance(tax.get("temas"), list) \
@@ -96,6 +106,14 @@ def normalizar_perfil(data: dict) -> dict:
     d["voceros"] = [v.strip() for v in (d["voceros"] or []) if str(v).strip()]
     d["criterio_custom"] = str(d["criterio_custom"] or "").strip()
     d["guia_subtema"] = str(d["guia_subtema"] or "").strip()
+    d["subtemas_fijos"] = [
+        {"contiene": str(r.get("contiene") or "").strip(),
+         "subtema": str(r.get("subtema") or "").strip()}
+        for r in (d["subtemas_fijos"] or [])
+        if isinstance(r, dict) and str(r.get("contiene") or "").strip()
+        and str(r.get("subtema") or "").strip()
+    ]
+    d["clasificar_tipo_genero"] = bool(d["clasificar_tipo_genero"])
     d["notas"] = str(d["notas"] or "")
     if d["taxonomia"]:
         d["taxonomia"] = {

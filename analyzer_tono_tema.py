@@ -1144,6 +1144,12 @@ _LLAMADO_FUNCIONAL = {
 # sean nombres propios («Nacimiento de Gael en Santa Fe»): sin uno de
 # estos, una frase de solo nombres propios es una lista, no un subtema.
 _SUSTANTIVO_HECHO = {
+    # v1.5 (nuevos repos): 'alerta' es sustantivo de hecho (como 'anuncio' o
+    # 'convocatoria'): una etiqueta que empieza por ella ("Alertas
+    # Defensoría del Pueblo", "Alerta Temprana en Cauca") nombra un hecho y
+    # NO es una lista de nombres propios, así que no debe marcarse
+    # 'subtema_sin_hecho' ni caer a 'Hecho informativo' en la puerta final.
+    'alerta', 'alertas',
     'nacimiento', 'fallecimiento', 'muerte', 'reconocimiento', 'entrega',
     'apertura', 'clausura', 'inauguracion', 'lanzamiento', 'anuncio',
     'designacion', 'nombramiento', 'posesion', 'renuncia', 'destitucion',
@@ -1730,6 +1736,97 @@ def _cubo_mas_cercano(sub_tema: str, titulo: str, tax: dict) -> Optional[str]:
 # ============================================================================
 # 5. Prompts (rubrica ordenada + ejemplos + contrato JSON)
 # ============================================================================
+# ============================================================================
+# v1.6 (nuevos repos): TIPO y GÉNERO — mecanismo GENÉRICO, activado por
+# perfil (campo "clasificar_tipo_genero"). Solo se activa cuando el perfil
+# lo pide; con el flag apagado el prompt, la normalización y la salida son
+# exactamente los de antes. TIPO describe la relación de la noticia con la
+# entidad (no el tipo de medio); GÉNERO describe la forma periodística.
+# ============================================================================
+TIPOS_VALIDOS = ["Institucional", "Proyectos y programas", "Información general"]
+GENEROS_VALIDOS = ["Noticia", "Opinión", "Entrevista"]
+TIPO_DEFECTO = "Información general"
+GENERO_DEFECTO = "Noticia"
+REGLAS_TIPO_GENERO = (
+    "TIPO (relación de la noticia con la entidad; NO es el tipo de medio): "
+    "«Institucional» si la noticia trata de la propia entidad, su gestión, sus decisiones o sus "
+    "actos, o si interviene su vocero (el vocero indicado arriba) en nombre de la entidad: la "
+    "intervención del vocero también es Institucional, aunque hable de un proyecto. "
+    "«Proyectos y programas» si la noticia trata de un proyecto, programa, iniciativa o acción "
+    "concreta que no es institucional en sí. «Información general» si la noticia solo menciona "
+    "de forma general o referencial a la entidad o al cargo, sin que sea el tema central ni un "
+    "proyecto concreto. Precedencia: vocero o asunto propio -> Institucional; si no, proyecto "
+    "concreto -> Proyectos y programas; si no, referencia general -> Información general. "
+    "GÉNERO (forma periodística): «Entrevista» solo si hay un diálogo claro de preguntas y "
+    "respuestas entre dos personas que se alternan (por ejemplo, marcas como «VD: ¿…? / DJ: …» "
+    "con preguntas y respuestas sucesivas). «Opinión» solo si es una columna de opinión firmada, "
+    "con voz argumentativa del autor; una noticia que cita o recoge la intervención de otra "
+    "persona NO es opinión, y una sola declaración o cita tampoco es entrevista. En cualquier "
+    "otro caso, y SIEMPRE que dudes, «Noticia»."
+)
+
+
+def _canon_tipo_genero(valor, validos):
+    """Canónico exacto tolerante a mayúsculas/acentos; None si no es válido."""
+    v = nz(str(valor or ""))
+    for c in validos:
+        if nz(c) == v:
+            return c
+    return None
+
+
+def aplicar_guardia_genero(grupos, etiquetas):
+    """Freno determinista para Entrevista: sin preguntas ni marcas de dos
+    interlocutores en el texto del grupo, una Entrevista baja a Noticia.
+    Solo baja, nunca sube: el modelo sigue siendo quien detecta el diálogo.
+    Devuelve nº de grupos bajados."""
+    cambios = 0
+    for g in grupos:
+        e = etiquetas.get(g.get("grupo")) or {}
+        if e.get("genero") != "Entrevista":
+            continue
+        texto = " ".join([
+            str(g.get("titulo") or ""),
+            " ".join(g.get("titulos_alt") or []),
+            str(g.get("texto") or ""),
+            str(g.get("contexto") or ""),
+            str(g.get("contexto_marca") or ""),
+        ])
+        tiene_pregunta = ("?" in texto) or ("¿" in texto)
+        marcas = set(re.findall(r"\b[A-ZÁÉÍÓÚÑ]{2,4}:", texto))
+        if not tiene_pregunta and len(marcas) < 2:
+            e["genero"] = "Noticia"
+            cambios += 1
+    return cambios
+
+
+def aplicar_genero_por_seccion(rows, mapa, etiquetas, km):
+    """Rescate de columnas de opinión por la Sección del dossier: si alguna
+    fila del grupo trae Sección - Programa con opinión o columna y el grupo
+    está como Noticia, pasa a Opinión. Solo rescata omisiones: nunca
+    sobrescribe una Entrevista ni una Opinión ya asignadas. Devuelve nº
+    de grupos cambiados."""
+    sec_col = km.get("seccion_programa", "Sección - Programa") if isinstance(km, dict) else "Sección - Programa"
+    filas_por_grupo = defaultdict(list)
+    for i, gid in (mapa or {}).items():
+        if gid:
+            filas_por_grupo[gid].append(i)
+    cambios = 0
+    for gid, idxs in filas_por_grupo.items():
+        e = etiquetas.get(gid) or {}
+        if e.get("genero") != "Noticia":
+            continue
+        for i in idxs:
+            if i >= len(rows):
+                continue
+            sec = nz(str(rows[i].get(sec_col) or rows[i].get("Sección - Programa") or ""))
+            if "opinion" in sec or "columna" in sec:
+                e["genero"] = "Opinión"
+                cambios += 1
+                break
+    return cambios
+
+
 def prompt_sistema(cfg: dict) -> str:
     crit = cfg.get('criterio') or list(CRITERIOS_TONO)[0]
     # Criterio personalizado del perfil de cliente: gana sobre el catálogo.
@@ -1758,19 +1855,35 @@ def prompt_sistema(cfg: dict) -> str:
         '',
         'EJEMPLOS YA ETIQUETADOS (imita el criterio, la brevedad y las mayusculas)',
     ]
+    # v1.6: TIPO/GÉNERO solo si el perfil lo pide; se inserta antes del
+    # encabezado de ejemplos para que quede junto a las demás reglas.
+    if cfg.get('clasificar_tipo_genero'):
+        idx_ej = lineas.index('EJEMPLOS YA ETIQUETADOS (imita el criterio, la brevedad y las mayusculas)')
+        lineas[idx_ej:idx_ej] = ['', 'REGLA DE TIPO Y GÉNERO', REGLAS_TIPO_GENERO]
     ejemplos = list(EJEMPLOS) + EJEMPLOS_TEMA
     if crit.startswith('Favorabilidad'):
         ejemplos += EJEMPLOS_SECTOR
     for e in ejemplos:
         lineas.append('  TITULAR: %s' % e['titulo'])
         lineas.append('  ->  sub_tema: "%s"  |  tono: %s' % (e['sub_tema'], e['tono']))
-    lineas += [
-        '',
-        'SALIDA: solo JSON, sin markdown y sin explicaciones:',
-        '{"resultados":[{"id":<numero de grupo>,"sub_tema":"<3 a 5 palabras>",'
-        '"tono":"Positivo|Neutro|Negativo"}]}',
-        'Un objeto por cada grupo recibido, con su id exacto.',
-    ]
+    if cfg.get('clasificar_tipo_genero'):
+        lineas += [
+            '',
+            'SALIDA: solo JSON, sin markdown y sin explicaciones:',
+            '{"resultados":[{"id":<numero de grupo>,"sub_tema":"<3 a 5 palabras>",'
+            '"tono":"Positivo|Neutro|Negativo",'
+            '"tipo":"Institucional|Proyectos y programas|Información general",'
+            '"genero":"Noticia|Opinión|Entrevista"}]}',
+            'Un objeto por cada grupo recibido, con su id exacto.',
+        ]
+    else:
+        lineas += [
+            '',
+            'SALIDA: solo JSON, sin markdown y sin explicaciones:',
+            '{"resultados":[{"id":<numero de grupo>,"sub_tema":"<3 a 5 palabras>",'
+            '"tono":"Positivo|Neutro|Negativo"}]}',
+            'Un objeto por cada grupo recibido, con su id exacto.',
+        ]
     return '\n'.join(lineas)
 
 
@@ -1977,7 +2090,7 @@ def llamar_llm(cfg: dict, mensajes: List[dict], json_mode: bool = True,
     raise RuntimeError('Fallo la llamada al modelo: %s' % ultimo)
 
 
-def _normaliza_label(d: dict, ids_lote: Sequence[int]) -> Dict[int, dict]:
+def _normaliza_label(d: dict, ids_lote: Sequence[int], con_tipo_genero: bool = False) -> Dict[int, dict]:
     salida = {}
     for r in (d or {}).get('resultados', []) or []:
         try:
@@ -1986,8 +2099,16 @@ def _normaliza_label(d: dict, ids_lote: Sequence[int]) -> Dict[int, dict]:
             continue
         if gid in ids_lote:
             tono = sq(r.get('tono')).capitalize()
-            salida[gid] = {'sub_tema': sq(r.get('sub_tema')),
-                           'tono': tono if tono in TONOS else 'Neutro'}
+            e = {'sub_tema': sq(r.get('sub_tema')),
+                 'tono': tono if tono in TONOS else 'Neutro'}
+            if con_tipo_genero:
+                tip = _canon_tipo_genero(r.get('tipo'), TIPOS_VALIDOS)
+                gen = _canon_tipo_genero(r.get('genero'), GENEROS_VALIDOS)
+                if tip:
+                    e['tipo'] = tip
+                if gen:
+                    e['genero'] = gen
+            salida[gid] = e
     return salida
 
 
@@ -2021,7 +2142,17 @@ def _voto_mayoria(por_grupo: List[Dict[int, dict]], ids_lote: Sequence[int]) -> 
             # ajeno y corto como «Investigación sobre Carnaval 2027» le ganaba
             # a «Creación de la Universidad de Atalaya»). Criterio v4.15.
             sub = max(candidatos, key=len)
-        salida[gid] = {'sub_tema': sub, 'tono': tono}
+        e_out = {'sub_tema': sub, 'tono': tono}
+        for _campo, _validos, _defecto in (('tipo', TIPOS_VALIDOS, TIPO_DEFECTO),
+                                           ('genero', GENEROS_VALIDOS, GENERO_DEFECTO)):
+            _vals = [v[gid][_campo] for v in por_grupo
+                     if gid in v and v[gid].get(_campo) in _validos]
+            if _vals:
+                _c2 = Counter(_vals)
+                _top2 = _c2.most_common()
+                e_out[_campo] = (_top2[0][0] if len(_top2) == 1 or _top2[0][1] > _top2[1][1]
+                                 else _defecto)
+        salida[gid] = e_out
     return salida
 
 
@@ -2051,7 +2182,8 @@ def etiquetar_grupos(cfg: dict, grupos: List[dict], progress: Optional[Callable]
         for intento in range(2):
             try:
                 txt = llamar_llm(cfg, sys_msg, uso=uso)
-                labels = _normaliza_label(_json_loose(txt), ids)
+                labels = _normaliza_label(_json_loose(txt), ids,
+                                         con_tipo_genero=bool(cfg.get('clasificar_tipo_genero')))
                 if labels:
                     return lote, labels
             except Exception:
@@ -2140,7 +2272,8 @@ def etiquetar_grupos(cfg: dict, grupos: List[dict], progress: Optional[Callable]
                 txt = llamar_llm(cfg, [{'role': 'system', 'content': prompt_sistema(cfg)},
                                        {'role': 'user', 'content': prompt_reparacion(trozo)}],
                                  uso=uso)
-                return _normaliza_label(_json_loose(txt), [f['grupo'] for f in trozo])
+                return _normaliza_label(_json_loose(txt), [f['grupo'] for f in trozo],
+                                         con_tipo_genero=bool(cfg.get('clasificar_tipo_genero')))
             except Exception:
                 return {}
 
@@ -2156,7 +2289,11 @@ def etiquetar_grupos(cfg: dict, grupos: List[dict], progress: Optional[Callable]
         for corr in correcciones:
             for gid, v in corr.items():
                 if v.get('sub_tema'):
-                    etiquetas[gid] = v
+                    # v1.6: no perder tipo/género: la reparación solo devuelve
+                    # sub_tema/tono, así que se fusiona sobre la etiqueta vieja.
+                    _nuevo = dict(etiquetas.get(gid) or {})
+                    _nuevo.update(v)
+                    etiquetas[gid] = _nuevo
 
     # ---- fallback determinista para lo que quedo vacio: nunca dejamos una fila sin etiqueta ----
     # v4.21: el rótulo se deriva del titular con _subtema_desde_titulo (rótulo
@@ -2169,6 +2306,15 @@ def etiquetar_grupos(cfg: dict, grupos: List[dict], progress: Optional[Callable]
             fallidos.append(g['grupo'])
         if not e.get('tono'):
             e['tono'] = 'Neutro'
+        if cfg.get('clasificar_tipo_genero'):
+            if e.get('tipo') not in TIPOS_VALIDOS:
+                e['tipo'] = TIPO_DEFECTO
+            if e.get('genero') not in GENEROS_VALIDOS:
+                e['genero'] = GENERO_DEFECTO
+
+    # v1.6: guardia determinista de género (freno para Entrevista sin diálogo).
+    if cfg.get('clasificar_tipo_genero'):
+        aplicar_guardia_genero(grupos, etiquetas)
 
     # Jev decide el tono aspectual sobre la entidad; el LLM existente conserva
     # la generación de subtema y el resto del flujo.
@@ -3648,12 +3794,17 @@ def unificar_etiquetas_titulos_similares(rows: List[dict], mapa: Dict[int, int],
         filas = [idx_validos[k] for k in miembros]
         gids = [gid_de[k] for k in miembros]
         tonos, tems, subs = [], [], []
+        tipos_bloque, gens_bloque = [], []
         for i, gid in zip(filas, gids):
             e = etiquetas.get(gid) or {}
             tonos.append(e.get('tono') or 'Neutro')
             if incluir_tema:
                 tems.append(temas.get(gid) or '')
             subs.append(e.get('sub_tema') or '')
+            if e.get('tipo') in TIPOS_VALIDOS:
+                tipos_bloque.append(e['tipo'])
+            if e.get('genero') in GENEROS_VALIDOS:
+                gens_bloque.append(e['genero'])
         tems = [t for t in tems if t]
         subs = [s for s in subs if s]
         # v4.35: el canon de SUBTEMA debe ser fiel al título/cuerpo de TODAS
@@ -3686,6 +3837,20 @@ def unificar_etiquetas_titulos_similares(rows: List[dict], mapa: Dict[int, int],
             if canon_tono and e.get('tono') != canon_tono:
                 e['tono'] = canon_tono
                 cambios += 1
+            # v1.6: mismo bloque de títulos similares -> mismo TIPO y GÉNERO
+            # (por mayoría; empate -> default). Solo si el bloque trae valores
+            # (sin flag, no hay valores y esto no hace nada).
+            for _campo, _vals, _defecto in (('tipo', tipos_bloque, TIPO_DEFECTO),
+                                            ('genero', gens_bloque, GENERO_DEFECTO)):
+                if not _vals:
+                    continue
+                _ct = Counter(_vals)
+                _tt = _ct.most_common()
+                _canon = (_tt[0][0] if len(_tt) == 1 or _tt[0][1] > _tt[1][1]
+                          else _defecto)
+                if e.get(_campo) != _canon:
+                    e[_campo] = _canon
+                    cambios += 1
     return cambios
 
 
@@ -5463,6 +5628,8 @@ def volcar_analisis_en_filas(rows: List[dict], mapa: Dict[int, int],
             row['Tono_IA'] = 'Duplicada'
             row['Tema_IA'] = '-' if incluir_tema else ''
             row['Subtema_IA'] = '-'
+            row['TIPO'] = '-'
+            row['GÉNERO'] = '-'
             continue
         gid = mapa.get(i)
         e = etiquetas.get(gid, {}) if gid else {}
@@ -5474,12 +5641,59 @@ def volcar_analisis_en_filas(rows: List[dict], mapa: Dict[int, int],
             row['Subtema_IA'] = ajustes_subtema[i]
         else:
             row['Subtema_IA'] = e.get('sub_tema') or 'Hecho informativo'
+        row['TIPO'] = e.get('tipo') or ''
+        row['GÉNERO'] = e.get('genero') or ''
     return rows
 
 
 # ============================================================================
 # 8. Entrada compatible con el pipeline
 # ============================================================================
+# ============================================================================
+# v1.5 (nuevos repos): subtemas fijos del perfil — mecanismo GENÉRICO.
+# El perfil puede fijar un subtema exacto cuando el título/contexto del
+# grupo contiene una frase (p. ej. Defensoría: "alerta temprana" ->
+# "Alertas Defensoría del Pueblo"). El motor no conoce ningún cliente: lee
+# la lista del perfil, compara por raíces (tolerante a singular/plural y
+# mayúsculas/acentos) y fija el subtema verbatim. Así la regla vale aunque
+# el LLM devuelva variantes, y como el subtema queda unificado antes de
+# asignar_temas, forzar_un_tema_por_subtema unifica también el Tema_IA.
+# ============================================================================
+def aplicar_subtemas_fijos(grupos, etiquetas, reglas):
+    """Fija subtemas por frase del perfil. Devuelve nº de grupos cambiados."""
+    limpias = []
+    for r in (reglas or []):
+        if not isinstance(r, dict):
+            continue
+        contiene = str(r.get("contiene") or "").strip()
+        subtema = str(r.get("subtema") or "").strip()
+        if contiene and subtema:
+            limpias.append((contiene, subtema))
+    if not limpias or not grupos:
+        return 0
+    cambios = 0
+    for g in grupos:
+        gid = g.get("grupo")
+        if gid not in etiquetas:
+            continue
+        texto = " ".join([
+            str(g.get("titulo") or ""),
+            " ".join(g.get("titulos_alt") or []),
+            str(g.get("texto") or ""),
+            str(g.get("contexto") or ""),
+            str(g.get("contexto_marca") or ""),
+        ])
+        tallos = {raiz(w) for w in words(texto)}
+        for contiene, subtema in limpias:
+            pide = {raiz(w) for w in words(contiene)}
+            if pide and pide <= tallos:
+                if etiquetas[gid].get("sub_tema") != subtema:
+                    etiquetas[gid]["sub_tema"] = subtema
+                    cambios += 1
+                break
+    return cambios
+
+
 def enrich_rows_with_ai(
     rows: List[dict],
     km: dict,
@@ -5501,6 +5715,8 @@ def enrich_rows_with_ai(
         'criterio': extra.get('criterio') or list(CRITERIOS_TONO)[0],
         'criterio_texto': (extra.get('criterio_texto') or '').strip(),
         'guia_subtema': (extra.get('guia_subtema') or '').strip(),
+        'subtemas_fijos': extra.get('subtemas_fijos') or [],
+        'clasificar_tipo_genero': bool(extra.get('clasificar_tipo_genero')),
         'api_key': api_key,
         'typesafe_api_key': extra.get('typesafe_api_key') or '',
         'typesafe_model': extra.get('typesafe_model') or 'jev-latest',
@@ -5587,6 +5803,12 @@ def enrich_rows_with_ai(
         grupos, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
     if extra_ancla:
         _ULTIMO_RESUMEN['subtemas_unificados_por_ancla'] = extra_ancla
+    # v1.5: subtemas fijos del perfil (ver aplicar_subtemas_fijos). Antes de
+    # tono y tema para que el voto por subtema y forzar_un_tema_por_subtema
+    # trabajen ya con el subtema unificado.
+    fijos = aplicar_subtemas_fijos(grupos, etiquetas, cfg.get('subtemas_fijos'))
+    if fijos and progress_callback:
+        progreso(93, 'Sub-temas fijos del perfil: %d' % fijos)
     if (cambios or extra_uni or extra_llm or ajenos or extra_ancla) and progress_callback:
         progreso(93, 'Sub-temas unificados: %d' % (cambios + extra_uni + extra_llm + ajenos + extra_ancla))
 
@@ -5708,6 +5930,10 @@ def enrich_rows_with_ai(
     ajustes_fieles = reparar_copias_finales(
         cfg, grupos, etiquetas, rows, mapa, km,
         ajustes_subtema=ajustes_fieles, uso=uso)
+
+    # v1.6: género por sección del dossier (solo si el perfil lo pide).
+    if cfg.get('clasificar_tipo_genero'):
+        aplicar_genero_por_seccion(rows, mapa, etiquetas, km)
 
     volcar_analisis_en_filas(
         rows, mapa, etiquetas, temas,

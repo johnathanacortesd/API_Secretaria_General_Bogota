@@ -86,6 +86,7 @@ def _es_perfil_fenavi(ai_config) -> bool:
 def output_columns_for_export(include_ai: bool = False, include_tema: bool = True,
                               include_prominencia: bool = False,
                               include_subtema: bool = True,
+                              include_tipo_genero: bool = False,
                               audiencia_antes_de_tier: bool = True) -> List[str]:
     """Columnas del xlsx de salida.
 
@@ -131,6 +132,22 @@ def output_columns_for_export(include_ai: bool = False, include_tema: bool = Tru
         cols.remove("Tema_IA")
     if not include_subtema and "Subtema_IA" in cols:
         cols.remove("Subtema_IA")
+    # v1.6: TIPO y GÉNERO justo antes de "Link Nota" (solo con IA y flag).
+    if include_ai and include_tipo_genero:
+        if "Link Nota" in cols:
+            _idx_link = cols.index("Link Nota")
+            for _off, _col in enumerate(("TIPO", "GÉNERO")):
+                if _col not in cols:
+                    cols.insert(_idx_link + _off, _col)
+        elif "Subtema_IA" in cols:
+            _idx_sub = cols.index("Subtema_IA")
+            for _off, _col in enumerate(("TIPO", "GÉNERO")):
+                if _col not in cols:
+                    cols.insert(_idx_sub + 1 + _off, _col)
+        else:
+            for _col in ("TIPO", "GÉNERO"):
+                if _col not in cols:
+                    cols.append(_col)
     if CONTEXTO_ANALIZADO_COL in cols:
         cols = [c for c in cols if c != CONTEXTO_ANALIZADO_COL]
     cols.append(CONTEXTO_ANALIZADO_COL)
@@ -153,6 +170,7 @@ def _columnas_preservadas(columnas_entrada, include_ai: bool = False,
                           include_tema: bool = True,
                           include_subtema: bool = True,
                           include_prominencia: bool = False,
+                          include_tipo_genero: bool = False,
                           audiencia_antes_de_tier: bool = True) -> List[str]:
     """Columnas de salida para la pestaña "Columnas personalizadas" (v4.33).
 
@@ -176,6 +194,18 @@ def _columnas_preservadas(columnas_entrada, include_ai: bool = False,
         if CONTEXTO_ANALIZADO_COL not in vistos:
             cols.append(CONTEXTO_ANALIZADO_COL)
             vistos.add(CONTEXTO_ANALIZADO_COL)
+    # v1.6: TIPO y GÉNERO justo antes de "Link Nota" (solo con IA y flag);
+    # sin Link Nota, quedan tras las columnas de IA (antes de texto/Audio).
+    if include_ai and include_tipo_genero:
+        if "Link Nota" in cols:
+            _idx_link = cols.index("Link Nota")
+            for _off, _col in enumerate(("TIPO", "GÉNERO")):
+                if _col not in cols:
+                    cols.insert(_idx_link + _off, _col)
+        else:
+            for _col in ("TIPO", "GÉNERO"):
+                if _col not in cols:
+                    cols.append(_col)
     if include_prominencia and "Prominencia" not in vistos:
         cols.append("Prominencia")
     # v4.56: "texto" y "Audio" siempre al final, en ese orden (aunque el
@@ -848,6 +878,8 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
                                tone_pkl_bytes, theme_pkl_bytes,
                                model="gpt-6-luna",
                                criterio_texto="", taxonomia=None, guia_subtema="",
+                               subtemas_fijos=None,
+                               clasificar_tipo_genero=False,
                                cubos_objetivo=16, votos=2, tam_lote=10,
                                workers=8, umbral_titulo=92, umbral_cuerpo=85):
     """ai_config de la pestaña "Columnas personalizadas" (v4.27/v4.28).
@@ -869,6 +901,8 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
         "criterio": criterio,
         "criterio_texto": (criterio_texto or "").strip(),
         "guia_subtema": (guia_subtema or "").strip(),
+        "subtemas_fijos": list(subtemas_fijos or []),
+        "clasificar_tipo_genero": bool(clasificar_tipo_genero),
         "taxonomia": taxonomia if taxonomia is not None
                      else "Automática según el archivo (recomendada)",
         "cubos_objetivo": int(cubos_objetivo),
@@ -1389,6 +1423,8 @@ def process_dossier(
         # v4.32: sin IA no hay subtema (ningún PKL lo genera); la columna
         # saldría vacía ("-"), así que no se exporta en modo solo-PKL.
         include_subtema=has_ai,
+        # v1.6: TIPO/GÉNERO solo con IA (sin IA no hay quien los clasifique).
+        include_tipo_genero=has_ai and bool(ai_extra.get("clasificar_tipo_genero")),
         # v4.52: Audiencia antes de Tier para todos, salvo el perfil Fenavi.
         audiencia_antes_de_tier=not _es_perfil_fenavi(ai_config),
     )
@@ -1402,6 +1438,7 @@ def process_dossier(
             include_tema=ai_extra.get("incluir_tema", True),
             include_subtema=has_ai,
             include_prominencia=_incluir_prominencia,
+            include_tipo_genero=has_ai and bool(ai_extra.get("clasificar_tipo_genero")),
             audiencia_antes_de_tier=not _es_perfil_fenavi(ai_config),
         )
 

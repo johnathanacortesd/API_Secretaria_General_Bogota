@@ -19,7 +19,7 @@ from pkl_classifier import PklClassifierError, load_sklearn_estimator
 from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.4"
+APP_VERSION = "v1.6"
 
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
@@ -539,6 +539,8 @@ def main():
                             st.session_state["criterio_custom_input"] = _perfil_actual.get("criterio_custom", "")
                             st.session_state["_perfil_taxonomia"] = _perfil_actual.get("taxonomia")
                             st.session_state["_perfil_guia_subtema"] = _perfil_actual.get("guia_subtema") or ""
+                            st.session_state["_perfil_subtemas_fijos"] = _perfil_actual.get("subtemas_fijos") or []
+                            st.session_state["_perfil_clasificar_tipo_genero"] = bool(_perfil_actual.get("clasificar_tipo_genero"))
                             st.session_state["_perfil_aplicado"] = sel_perfil
                             st.rerun()
                         st.caption("📋 " + perfil_a_resumen(_perfil_actual))
@@ -546,6 +548,8 @@ def main():
                     st.session_state["_perfil_aplicado"] = None
                     st.session_state["_perfil_taxonomia"] = None
                     st.session_state["_perfil_guia_subtema"] = ""
+                    st.session_state["_perfil_subtemas_fijos"] = []
+                    st.session_state["_perfil_clasificar_tipo_genero"] = False
 
                 with st.form("main_form"):
                     st.markdown('<div class="sec-label">1. Sube el archivo de entrada</div>', unsafe_allow_html=True)
@@ -795,6 +799,8 @@ def main():
                                         "criterio": criterio,
                                         "criterio_custom": criterio_texto,
                                         "guia_subtema": st.session_state.get("_perfil_guia_subtema") or "",
+                                        "subtemas_fijos": st.session_state.get("_perfil_subtemas_fijos") or [],
+                                        "clasificar_tipo_genero": bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
                                         "taxonomia": tax_cargada,
                                         "notas": "",
                                     })
@@ -825,6 +831,8 @@ def main():
                                     "criterio": criterio,
                                     "criterio_texto": criterio_texto,
                                     "guia_subtema": st.session_state.get("_perfil_guia_subtema") or "",
+                                    "subtemas_fijos": st.session_state.get("_perfil_subtemas_fijos") or [],
+                                    "clasificar_tipo_genero": bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
                                     "taxonomia": tax_eff,
                                     "cubos_objetivo": int(cubos_objetivo_input),
                                     "votos": int(votos_input),
@@ -1067,6 +1075,8 @@ def main():
                             model=modelo_sel_c,
                             criterio_texto=criterio_custom_c,
                             guia_subtema=st.session_state.get("_perfil_guia_subtema") or "",
+                            subtemas_fijos=st.session_state.get("_perfil_subtemas_fijos") or [],
+                            clasificar_tipo_genero=bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
                             taxonomia=tax_eff_c,
                             cubos_objetivo=int(cubos_objetivo_c),
                             votos=int(votos_c),

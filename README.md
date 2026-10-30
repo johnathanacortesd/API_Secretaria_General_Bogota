@@ -74,7 +74,7 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
 
 ## Archivos
 
-- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.4)
+- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.6)
 - `resumen_informe.py` — lectura de primera hoja, conteos y redacción
 - `clientes/` — solo el perfil de este cliente
 - `analyzer_tono_tema.py`, `pipeline.py`, `ai_analyzer.py`,
@@ -123,3 +123,35 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
   Al abrir, la marca, los alias, los voceros y el criterio quedan
   precargados; "Sin perfil" sigue disponible si se quiere configurar a
   mano.
+
+## Novedades v1.5 (2026-10-30, pendiente de push)
+
+- Soporte genérico en el motor para subtemas fijos del perfil
+  (`subtemas_fijos`: frase → subtema exacto), que se aplica después del
+  etiquetado y antes de asignar temas. En este repo el perfil lo trae
+  vacío, así que no cambia ningún comportamiento; el cambio de contenido
+  es solo para Defensoría (Alertas Tempranas).
+
+## Novedades v1.6 (2026-10-30, pendiente de push; incluye la v1.5, aún sin publicar)
+
+- Nuevas columnas TIPO y GÉNERO, justo antes de "Link Nota", en la
+  pestaña estándar y en la de Columnas personalizadas. Se asignan por
+  grupo (misma noticia = mismo TIPO y GÉNERO) en el mismo etiquetado
+  con IA, sin llamadas extra al modelo.
+- TIPO: "Institucional" si la noticia trata de la propia Secretaría/
+  Alcaldía o interviene su vocero (la intervención del vocero también
+  es Institucional, aunque hable de un proyecto); "Proyectos y
+  programas" si trata de un proyecto, programa, iniciativa o acción
+  concreta que no es institucional; "Información general" si solo
+  menciona de forma general o referencial a la entidad o al cargo.
+- GÉNERO: "Opinión" solo si es una columna de opinión firmada (una
+  noticia que cita a otra persona NO es opinión); "Entrevista" solo
+  si hay un diálogo claro de preguntas y respuestas entre dos personas
+  que se alternan (una sola declaración o cita NO es entrevista); en
+  cualquier otro caso, y siempre que haya duda, "Noticia".
+- Refuerzos deterministas: una Entrevista sin preguntas ni marcas de
+  dos interlocutores baja a Noticia; si la Sección del dossier dice
+  Opinión/Columna y el modelo marcó Noticia, sube a Opinión (nunca
+  sobrescribe una Entrevista). Valor inválido o empate: TIPO =
+  Información general, GÉNERO = Noticia. Las duplicadas llevan "-"
+  como en Tema/Subtema.
