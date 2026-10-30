@@ -19,7 +19,7 @@ from pkl_classifier import PklClassifierError, load_sklearn_estimator
 from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.2"
+APP_VERSION = "v1.3"
 
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
@@ -459,10 +459,10 @@ def main():
     # v1.2: aviso permanente del cliente, fuera de `ui` para que no
     # se borre durante el procesamiento ni falte en resultados.
     st.markdown(
-        '<div style="background:rgba(156,61,18,0.07);border:1px solid rgba(156,61,18,0.30);'
-        'border-radius:10px;padding:0.6rem 1rem;margin-bottom:1rem;">'
-        '📍 <strong>App de: {CLIENTE_NOMBRE}</strong>'
-        ' <span style="color:#57534e;">— Sistema de Limpieza y Análisis</span></div>',
+        f'<div style="background:rgba(156,61,18,0.07);border:1px solid rgba(156,61,18,0.30);'
+        f'border-radius:10px;padding:0.6rem 1rem;margin-bottom:1rem;">'
+        f'📍 <strong>App de: {CLIENTE_NOMBRE}</strong>'
+        f' <span style="color:#57534e;">— Sistema de Limpieza y Análisis</span></div>',
         unsafe_allow_html=True,
     )
 

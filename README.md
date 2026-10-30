@@ -74,7 +74,7 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
 
 ## Archivos
 
-- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.2)
+- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.3)
 - `resumen_informe.py` — lectura de primera hoja, conteos y redacción
 - `clientes/` — solo el perfil de este cliente
 - `analyzer_tono_tema.py`, `pipeline.py`, `ai_analyzer.py`,
@@ -106,3 +106,11 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
   de resultados) y en el pie de página. Las dos apps comparten diseño y
   título de sistema, por eso el aviso es explícito y no depende solo del
   encabezado.
+
+## Novedades v1.3 (2026-10-30, pendiente de push)
+
+- Corrección de la v1.2: el aviso permanente tras ingresar se había
+  escrito como texto plano sin `f`, así que en pantalla salía literal
+  "{CLIENTE_NOMBRE}" en vez del nombre. Ahora es f-string en los tres
+  sitios (contraseña, aviso permanente y pie) y se verifica el texto
+  renderizado, no solo el código fuente.
