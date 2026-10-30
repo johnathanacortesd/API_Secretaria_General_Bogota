@@ -19,7 +19,7 @@ from pkl_classifier import PklClassifierError, load_sklearn_estimator
 from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.0"
+APP_VERSION = "v1.1"
 
 # v4.51: sello del analizador que realmente corre en el contenedor. Se lee
 # del módulo del analizador (ya importado vía pipeline); si el despliegue
@@ -514,12 +514,14 @@ def main():
                                 _perfil_actual.get("criterio") or list(CRITERIOS_TONO)[0])
                             st.session_state["criterio_custom_input"] = _perfil_actual.get("criterio_custom", "")
                             st.session_state["_perfil_taxonomia"] = _perfil_actual.get("taxonomia")
+                            st.session_state["_perfil_guia_subtema"] = _perfil_actual.get("guia_subtema") or ""
                             st.session_state["_perfil_aplicado"] = sel_perfil
                             st.rerun()
                         st.caption("📋 " + perfil_a_resumen(_perfil_actual))
                 else:
                     st.session_state["_perfil_aplicado"] = None
                     st.session_state["_perfil_taxonomia"] = None
+                    st.session_state["_perfil_guia_subtema"] = ""
 
                 with st.form("main_form"):
                     st.markdown('<div class="sec-label">1. Sube el archivo de entrada</div>', unsafe_allow_html=True)
@@ -768,6 +770,7 @@ def main():
                                         "voceros": [v.strip() for v in re.split(r"[,;]", voceros_input) if v.strip()],
                                         "criterio": criterio,
                                         "criterio_custom": criterio_texto,
+                                        "guia_subtema": st.session_state.get("_perfil_guia_subtema") or "",
                                         "taxonomia": tax_cargada,
                                         "notas": "",
                                     })
@@ -797,6 +800,7 @@ def main():
                                     "voceros": [v.strip() for v in re.split(r"[,;]", voceros_input) if v.strip()],
                                     "criterio": criterio,
                                     "criterio_texto": criterio_texto,
+                                    "guia_subtema": st.session_state.get("_perfil_guia_subtema") or "",
                                     "taxonomia": tax_eff,
                                     "cubos_objetivo": int(cubos_objetivo_input),
                                     "votos": int(votos_input),
@@ -1038,6 +1042,7 @@ def main():
                             theme_pkl_bytes=theme_bytes_c,
                             model=modelo_sel_c,
                             criterio_texto=criterio_custom_c,
+                            guia_subtema=st.session_state.get("_perfil_guia_subtema") or "",
                             taxonomia=tax_eff_c,
                             cubos_objetivo=int(cubos_objetivo_c),
                             votos=int(votos_c),

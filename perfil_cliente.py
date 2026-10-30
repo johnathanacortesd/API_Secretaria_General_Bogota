@@ -57,6 +57,7 @@ def _defaults() -> dict:
         "criterio": list(CRITERIOS_TONO)[0],
         "criterio_custom": "",
         "taxonomia": None,
+        "guia_subtema": "",
         "notas": "",
     }
 
@@ -94,6 +95,7 @@ def normalizar_perfil(data: dict) -> dict:
     d["aliases"] = [a.strip() for a in (d["aliases"] or []) if str(a).strip()]
     d["voceros"] = [v.strip() for v in (d["voceros"] or []) if str(v).strip()]
     d["criterio_custom"] = str(d["criterio_custom"] or "").strip()
+    d["guia_subtema"] = str(d["guia_subtema"] or "").strip()
     d["notas"] = str(d["notas"] or "")
     if d["taxonomia"]:
         d["taxonomia"] = {

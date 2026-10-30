@@ -847,7 +847,7 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
                                api_key, typesafe_api_key, historial_dir,
                                tone_pkl_bytes, theme_pkl_bytes,
                                model="gpt-6-luna",
-                               criterio_texto="", taxonomia=None,
+                               criterio_texto="", taxonomia=None, guia_subtema="",
                                cubos_objetivo=16, votos=2, tam_lote=10,
                                workers=8, umbral_titulo=92, umbral_cuerpo=85):
     """ai_config de la pestaña "Columnas personalizadas" (v4.27/v4.28).
@@ -868,6 +868,7 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
         "voceros": [v.strip() for v in re.split(r"[,;]", voceros_txt or "") if v.strip()],
         "criterio": criterio,
         "criterio_texto": (criterio_texto or "").strip(),
+        "guia_subtema": (guia_subtema or "").strip(),
         "taxonomia": taxonomia if taxonomia is not None
                      else "Automática según el archivo (recomendada)",
         "cubos_objetivo": int(cubos_objetivo),

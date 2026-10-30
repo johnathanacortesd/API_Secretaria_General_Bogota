@@ -52,11 +52,11 @@ from catalogo_tono_tema import (
 def _regex_coincidencia(brand: str, aliases: Sequence[str], voceros: Sequence[str]) -> List[str]:
     """Regexes de marca + alias + voceros para localizar la evidencia en el texto."""
     rx = []
-    alineados = [x for x in aliases if x and len(str(x).strip()) > 2]
-    vocs = [v for v in voceros if v and len(str(v).strip()) > 2]
+    alineados = [x for x in aliases if x and len(str(x).strip()) >= 2]
+    vocs = [v for v in voceros if v and len(str(v).strip()) >= 2]
     for nombre in [brand] + list(alineados) + list(vocs):
         n = nz(nombre)
-        if not n or len(n) < 3:
+        if not n or len(n) < 2:
             continue
         # frase exacta con bordes de palabra, sobre texto normalizado
         rx.append(r'(?<![a-z0-9])' + re.escape(n) + r'(?![a-z0-9])')
@@ -365,7 +365,7 @@ def _contexto_exacto_marca(texto: str, titulo: str, brand: str,
     """
     fuente = str(texto or '')
     nombres = [str(x).strip() for x in [brand, *(aliases or []), *(voceros or [])]
-               if str(x or '').strip() and len(nz(x)) >= 3]
+               if str(x or '').strip() and len(nz(x)) >= 2]
     if not fuente or not nombres:
         return str(titulo or '').strip()[:TOPE_CTX_GENERAL]
 
@@ -1748,6 +1748,8 @@ def prompt_sistema(cfg: dict) -> str:
         '',
         'REGLA DE SUB-TEMA',
         REGLAS_SUBTEMA,
+        ('GUÍA DE SUBTEMAS PARA ESTE CLIENTE: ' + cfg.get('guia_subtema')
+         if (cfg.get('guia_subtema') or '').strip() else ''),
         # v4.35: fidelidad — el sub-tema debe corresponder al titular y al
         # contexto literal del grupo (caso real 2026-09-28: «Designación de
         # Vélez» en noticias que no la mencionaban).
@@ -5498,6 +5500,7 @@ def enrich_rows_with_ai(
         'voceros': list(extra.get('voceros') or []),
         'criterio': extra.get('criterio') or list(CRITERIOS_TONO)[0],
         'criterio_texto': (extra.get('criterio_texto') or '').strip(),
+        'guia_subtema': (extra.get('guia_subtema') or '').strip(),
         'api_key': api_key,
         'typesafe_api_key': extra.get('typesafe_api_key') or '',
         'typesafe_model': extra.get('typesafe_model') or 'jev-latest',

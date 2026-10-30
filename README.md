@@ -74,7 +74,7 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
 
 ## Archivos
 
-- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.0)
+- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.1)
 - `resumen_informe.py` — lectura de primera hoja, conteos y redacción
 - `clientes/` — solo el perfil de este cliente
 - `analyzer_tono_tema.py`, `pipeline.py`, `ai_analyzer.py`,
@@ -82,3 +82,16 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
   `historial_cliente.py`, `auditoria_mail.py` — motor Grill v4.67
 - `SPEC_TONO_TEMA.md` — especificación de tono/tema heredada de Grill
 - `requirements.txt` — dependencias (Streamlit, pandas, openpyxl, openai…)
+
+## Novedades v1.1 (2026-10-30, pendiente de push)
+
+- Sigla **SGB** agregada como alias, junto a "Secretaría General de
+  Bogotá".
+- La comparación de marca/alias/vocero ya era sin mayúsculas ni acentos
+  (se normaliza antes de comparar); se verificó con pruebas: valen
+  "miguel silva" en minúsculas, "MIGUEL SILVA MOYANO" y "Miguel Silva"
+  (nombre + primer apellido), además del nombre completo.
+- Corrección general en estos dos repos (no en Grill): las siglas de 2
+  letras ya cuentan en título y en Contexto analizado (antes se exigían
+  3 caracteres y "DP" se caía); los bordes de palabra evitan que "DP"
+  cuente dentro de otra palabra.
