@@ -262,13 +262,13 @@ MAX_FILAS_POR_DOSSIER = 1000
 
 
 
-# v1.9 (solo Secretaría, por perfil "formato_boletin"): orden exacto del
+# v1.9 (por perfil "formato_boletin"): orden exacto del
 # xlsx final para el boletín, más dos columnas nuevas. FECHA INFORME es
-# la misma Fecha de la nota; HORA B es la hora del boletín según la hora
-# de Bogotá en que se corre: antes de la 1 p.m. -> "1:00 p.m.", desde la
-# 1 p.m. -> "6:00 p.m." (dos boletines al día). En la pestaña estándar
-# la salida es EXACTAMENTE estas 25 columnas; en la personalizada van
-# estas 25 primero y después cualquier columna personalizada extra (para
+# la fecha de procesamiento (Bogotá), NO la Fecha de la nota; HORA B es
+# la hora del boletín según el horario del perfil y la hora de Bogotá
+# en que se corre. En la pestaña estándar
+# la salida es EXACTAMENTE las columnas del boletín; en la personalizada van
+# estas primero y después cualquier columna personalizada extra (para
 # no perder datos propios de esa pestaña). Tema_IA no está en la lista
 # y por tanto no se exporta en este formato, aunque se haya calculado.
 BOLETIN_COLUMNAS = [
@@ -1666,17 +1666,23 @@ def process_dossier(
     rows.sort(key=lambda r: (norm_key(r.get(KEY_MAP.get("titulo", "Título"), "")),
                              str(r.get(KEY_MAP.get("idnoticia", "ID Noticia"), ""))))
 
-    # v1.9: formato boletín (solo si el perfil lo trae). FECHA INFORME es
-    # la Fecha de la nota y HORA B es la del boletín según la hora de
-    # Bogotá en que se corre; ambas se fijan aquí, cuando las filas ya
-    # están finales y ordenadas, justo antes de exportar.
+    # v1.16/v1.12: formato boletín (solo si el perfil lo trae). FECHA
+    # INFORME es la fecha de procesamiento (Bogotá, mismo instante que
+    # HORA B), NO la Fecha de la nota: todas las filas llevan la misma
+    # fecha, la del día en que se corrió. HORA B es la del boletín según
+    # el horario del perfil y la hora de Bogotá en que se corre; ambas
+    # se fijan aquí, cuando las filas ya están finales y ordenadas,
+    # justo antes de exportar.
     if ai_extra.get("formato_boletin"):
-        _hora_b = hora_boletin_bogota(corte=ai_extra.get("hora_boletin_corte"),
+        _ahora_bogota = datetime.datetime.now(_zona_bogota())
+        _hora_b = hora_boletin_bogota(ahora=_ahora_bogota,
+                                      corte=ai_extra.get("hora_boletin_corte"),
                                       antes=ai_extra.get("hora_boletin_antes"),
                                       despues=ai_extra.get("hora_boletin_despues"))
-        _fecha_k = KEY_MAP.get("fecha", "Fecha")
+        _fecha_informe = _ahora_bogota.replace(tzinfo=None, hour=0, minute=0,
+                                               second=0, microsecond=0)
         for _r in rows:
-            _r["FECHA INFORME"] = _r.get(_fecha_k)
+            _r["FECHA INFORME"] = _fecha_informe
             _r["HORA B"] = _hora_b
 
     cols_to_export = output_columns_for_export(

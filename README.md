@@ -74,7 +74,7 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
 
 ## Archivos
 
-- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.15)
+- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.16)
 - `resumen_informe.py` — lectura de primera hoja, conteos y redacción
 - `clientes/` — solo el perfil de este cliente
 - `analyzer_tono_tema.py`, `pipeline.py`, `ai_analyzer.py`,
@@ -322,11 +322,20 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
   genérico (ver Defensoría v1.10) y aquí queda explícito en "6:00 p.m.".
 - Defensoría no se toca (salvo el motor compartido, que es idéntico).
 
-## Novedades v1.15 (2026-10-31, pendiente de push; solo Secretaría)
+## Novedades v1.15 (2026-10-31, PUSH HECHO, solo Secretaría)
 
 - Incluye todo lo de v1.14 (nunca pusheada).
 - Sin cambio de HORA B para Secretaría: sigue corte 13, antes
   "1:00 p.m.", después "6:00 p.m.". El horario del boletín ahora es
   un campo genérico de perfil (ver Defensoría v1.11) y aquí queda
   explícito con los valores de siempre.
+- Defensoría no se toca (salvo el motor compartido, que es idéntico).
+
+## Novedades v1.16 (2026-10-31, pendiente de push; solo Secretaría)
+
+- FECHA INFORME es la fecha de procesamiento (Bogotá, mismo instante
+  que HORA B), NO la Fecha de la nota: todas las filas llevan la
+  misma fecha, la del día en que se corrió. Antes llevaba la Fecha
+  de cada nota (v1.9). HORA B no cambia (corte 13, 1:00 p.m. /
+  6:00 p.m.), confirmado por el usuario 2026-10-31.
 - Defensoría no se toca (salvo el motor compartido, que es idéntico).
