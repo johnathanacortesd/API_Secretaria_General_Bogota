@@ -14,12 +14,13 @@ from catalogo_tono_tema import CRITERIOS_TONO
 from perfil_cliente import cargar_perfil, guardar_perfil, listar_perfiles, perfil_a_resumen, slugify
 from pipeline import (process_dossier, leer_columnas_xlsx, sugerir_columna,
                       renombrar_columnas_xlsx, construir_ai_config_custom,
-                      LimiteFilasError)
+                      LimiteFilasError, ErrorSheetsAnalizadas,
+                      cargar_ids_analizados_desde_sheets)
 from pkl_classifier import PklClassifierError, load_sklearn_estimator
 from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.6"
+APP_VERSION = "v1.10"
 
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
@@ -401,12 +402,29 @@ def run_cleaning_process(df_file, file_meta=None, ai_config=None):
 
         try:
             region_map, internet_map = load_config_from_sheets()
+            # v1.8: filtro de notas ya analizadas (Google Sheets). Se lee
+            # la hoja actual en cada corrida; si no se puede leer y el
+            # filtro está activado, se detiene sin procesar (el usuario
+            # puede desactivar el filtro y procesar todo).
+            ai_config_efectivo = ai_config
+            if ai_config and ai_config.get("excluir_analizados"):
+                paint(1, "Leyendo notas ya analizadas (Google Sheets)…")
+                try:
+                    ids_analizados = cargar_ids_analizados_desde_sheets()
+                except ErrorSheetsAnalizadas as exc:
+                    status_widget.update(
+                        label="No se pudo leer la hoja de notas ya analizadas",
+                        state="error")
+                    st.error(f"⚠️ {exc}")
+                    return
+                ai_config_efectivo = dict(ai_config)
+                ai_config_efectivo["ids_analizados"] = ids_analizados
             result = process_dossier(
                 df_file,
                 region_map,
                 internet_map,
                 progress=on_progress,
-                ai_config=ai_config,
+                ai_config=ai_config_efectivo,
                 # v4.56: el tiempo reportado cubre desde que empezó el proceso
                 # (incluida la carga de configuración), no solo el pipeline.
                 t_inicio=t_start,
@@ -436,6 +454,9 @@ def run_cleaning_process(df_file, file_meta=None, ai_config=None):
         "unique_rows": result["unique_rows"],
         "duplicates": result["duplicates"],
         "process_duration": result["process_duration"],
+        "omitidas_analizadas": result.get("omitidas_analizadas", 0),
+        "omitidas_analizadas_aplicado": result.get(
+            "omitidas_analizadas_aplicado", False),
     })
     if ai_config and ai_config.get("brand"):
         st.session_state["ai_config"] = ai_config
@@ -541,6 +562,7 @@ def main():
                             st.session_state["_perfil_guia_subtema"] = _perfil_actual.get("guia_subtema") or ""
                             st.session_state["_perfil_subtemas_fijos"] = _perfil_actual.get("subtemas_fijos") or []
                             st.session_state["_perfil_clasificar_tipo_genero"] = bool(_perfil_actual.get("clasificar_tipo_genero"))
+                            st.session_state["_perfil_formato_boletin"] = bool(_perfil_actual.get("formato_boletin"))
                             st.session_state["_perfil_aplicado"] = sel_perfil
                             st.rerun()
                         st.caption("📋 " + perfil_a_resumen(_perfil_actual))
@@ -550,6 +572,7 @@ def main():
                     st.session_state["_perfil_guia_subtema"] = ""
                     st.session_state["_perfil_subtemas_fijos"] = []
                     st.session_state["_perfil_clasificar_tipo_genero"] = False
+                    st.session_state["_perfil_formato_boletin"] = False
 
                 with st.form("main_form"):
                     st.markdown('<div class="sec-label">1. Sube el archivo de entrada</div>', unsafe_allow_html=True)
@@ -638,6 +661,15 @@ def main():
                                  "menciones. Compartida: 2-3 menciones, o marca en el título con "
                                  "0-1 en el cuerpo. Referencial: 0-1 menciones. En radio/TV el "
                                  "título lo pone el auditor y no cuenta: solo vale el contenido.",
+                        )
+                        excluir_analizados_chk = st.checkbox(
+                            "Excluir notas ya analizadas (Google Sheets)",
+                            value=True,
+                            help="Compara el ID de cada nota (columna NoticiaId) con la "
+                                 "columna ID de la hoja 'Base, boletín SGB' y solo procesa "
+                                 "las notas que NO están en la hoja. Si la hoja no se puede "
+                                 "leer, el proceso se detiene; desmarca esta opción para "
+                                 "procesar todas las notas de todas formas.",
                         )
 
                     with st.expander("⚙ Ajustes finos del análisis (opcional)"):
@@ -801,6 +833,7 @@ def main():
                                         "guia_subtema": st.session_state.get("_perfil_guia_subtema") or "",
                                         "subtemas_fijos": st.session_state.get("_perfil_subtemas_fijos") or [],
                                         "clasificar_tipo_genero": bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
+                                        "formato_boletin": bool(st.session_state.get("_perfil_formato_boletin")),
                                         "taxonomia": tax_cargada,
                                         "notas": "",
                                     })
@@ -833,11 +866,13 @@ def main():
                                     "guia_subtema": st.session_state.get("_perfil_guia_subtema") or "",
                                     "subtemas_fijos": st.session_state.get("_perfil_subtemas_fijos") or [],
                                     "clasificar_tipo_genero": bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
+                                    "formato_boletin": bool(st.session_state.get("_perfil_formato_boletin")),
                                     "taxonomia": tax_eff,
                                     "cubos_objetivo": int(cubos_objetivo_input),
                                     "votos": int(votos_input),
                                     "incluir_tema": modo_tema_input == _OPCIONES_TEMA[1],
                                     "incluir_prominencia": bool(prominencia_chk),
+                                    "excluir_analizados": bool(excluir_analizados_chk),
                                     "permitir_cubos_nuevos": True,
                                     "tam_lote": int(tam_lote_input),
                                     "workers": int(workers_input),
@@ -954,6 +989,14 @@ def main():
                     value=False, key="prominencia_custom",
                     help="Igual que en la pestaña estándar: métrica determinista que va al final, "
                          "después de «Contexto analizado».")
+                excluir_analizados_c = st.checkbox(
+                    "Excluir notas ya analizadas (Google Sheets)",
+                    value=True, key="excluir_analizados_custom",
+                    help="Compara el ID de cada nota (columna NoticiaId) con la "
+                         "columna ID de la hoja 'Base, boletín SGB' y solo procesa "
+                         "las notas que NO están en la hoja. Si la hoja no se puede "
+                         "leer, el proceso se detiene; desmarca esta opción para "
+                         "procesar todas las notas de todas formas.")
 
                 with st.expander("⚙ Ajustes finos del análisis (opcional)"):
                     cca, ccb, ccc, ccd = st.columns(4)
@@ -1066,6 +1109,7 @@ def main():
                             brand_c, alias_c, voceros_c, criterio_c,
                             incluir_tema=(modo_tema_c == _OPCIONES_TEMA_C[1]),
                             incluir_prominencia=bool(prominencia_c),
+                            excluir_analizados=bool(excluir_analizados_c),
                             enable_ai=enable_ai_c,
                             api_key=api_key,
                             typesafe_api_key=typesafe_api_key,
@@ -1077,6 +1121,7 @@ def main():
                             guia_subtema=st.session_state.get("_perfil_guia_subtema") or "",
                             subtemas_fijos=st.session_state.get("_perfil_subtemas_fijos") or [],
                             clasificar_tipo_genero=bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
+                            formato_boletin=bool(st.session_state.get("_perfil_formato_boletin")),
                             taxonomia=tax_eff_c,
                             cubos_objetivo=int(cubos_objetivo_c),
                             votos=int(votos_c),
@@ -1111,6 +1156,12 @@ def main():
                 st.warning(
                     "⚠️ Medios sin región asignada en Sheets (quedaron N/A): "
                     f"{', '.join(medios_sin_mapear)}."
+                )
+            if st.session_state.get("omitidas_analizadas_aplicado"):
+                st.info(
+                    "Notas ya analizadas omitidas según Google Sheets: "
+                    f"{st.session_state.get('omitidas_analizadas', 0)}. El archivo "
+                    "descargable contiene solo las notas nuevas."
                 )
 
             analisis = st.session_state.get("analisis") or {}

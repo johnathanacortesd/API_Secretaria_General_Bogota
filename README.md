@@ -74,7 +74,7 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
 
 ## Archivos
 
-- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.6)
+- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.10)
 - `resumen_informe.py` — lectura de primera hoja, conteos y redacción
 - `clientes/` — solo el perfil de este cliente
 - `analyzer_tono_tema.py`, `pipeline.py`, `ai_analyzer.py`,
@@ -155,3 +155,91 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
   sobrescribe una Entrevista). Valor inválido o empate: TIPO =
   Información general, GÉNERO = Noticia. Las duplicadas llevan "-"
   como en Tema/Subtema.
+
+## Novedades v1.7 (2026-10-30; incluida en v1.8, solo Secretaría)
+
+- Perfil ampliado por adición (no reemplaza nada): vocero adicional
+  Carlos Fernando Galán, alcalde de Bogotá, y alias adicional Bogotá
+  Camina Segura, estrategia distrital. Lo anterior queda intacto
+  (Miguel Silva Moyano, Alcaldía de Bogotá, resto de alias).
+- Formas adicionales del vocero Galán (mismo v1.7, a pedido del
+  usuario): "Galán", "Carlos Galán" y "el alcalde" también cuentan
+  como vocero, para darle mayor peso al tono con base en la
+  Secretaría o el secretario cuando ese vocero aparece. Con esto
+  queda resuelta la limitación anterior de "Galán" solo.
+
+## Novedades v1.8 (2026-10-31; incluida en v1.9, solo Secretaría)
+
+- Filtro de notas ya analizadas (Google Sheets): antes de procesar,
+  la app compara la columna NoticiaId del dossier con la columna ID
+  de la hoja "Base, boletín SGB" (primera hoja, "Mes actual") y
+  solo procesa las notas que NO están en la hoja. El archivo
+  descargable contiene solo las notas nuevas; al final se informa
+  cuántas notas ya analizadas se omitieron.
+- La hoja se lee en cada corrida vía exportación CSV pública (sin
+  inicio de sesión, igual que los mapas de región/internet), así que
+  si se agregan notas analizadas a la hoja, la siguiente corrida ya
+  las excluye. La comparación tolera ID numérico, decimal ("123.0")
+  y con espacios; las filas sin ID nunca se omiten (se procesan, por
+  duda) y si el dossier no trae columna de ID, se procesa todo.
+- El límite de 1.000 filas aplica a las notas NUEVAS, no al total del
+  archivo: las omitidas no consumen llamadas a la API.
+- Opción "Excluir notas ya analizadas (Google Sheets)" en ambas
+  pestañas (activada por defecto). Si la hoja no se puede leer, el
+  proceso se detiene con un mensaje claro en vez de reprocesar en
+  silencio; desmarcando la opción se procesan todas las notas.
+- Defensoría no se toca (sin esta función).
+- Rendimiento (misma v1.8): la hoja trae más de 30 mil filas y 21
+  columnas, pero la app ahora pide solo la columna ID al leerla
+  (usecols), así no parsea ni carga en memoria títulos y resúmenes
+  de 32 mil notas; la descarga es la misma (Google no permite bajar
+  una sola columna), pero el parseo pasa de 21 columnas a 1 y el
+  filtro en sí es una búsqueda en conjunto (instantánea). No hay
+  caché: cada corrida lee la hoja actual para no excluir notas
+  agregadas entre corridas. La app muestra "Leyendo notas ya
+  analizadas (Google Sheets)…" mientras lo hace.
+
+## Novedades v1.9 (2026-10-31; incluida en v1.10, solo Secretaría)
+
+- Orden exacto del xlsx final para el boletín (por perfil
+  "formato_boletin", solo Secretaría): ID Noticia, Fecha, Medio,
+  Región, Tipo de Medio, Sección - Programa, Título, Duración - Nro.
+  Caracteres, CPE, Audiencia, Tier, Tono_IA, Subtema_IA, TIPO, GÉNERO,
+  Link Nota, texto, Link Ext, Web Ext, FECHA INFORME, HORA B,
+  ID duplicada, Contexto analizado, Resumen - Aclaracion, Audio.
+  En la pestaña estándar la salida es exactamente esas 25; en la
+  personalizada van esas 25 primero y después las columnas
+  personalizadas extra (para no perder datos propios).
+- FECHA INFORME es la misma Fecha de la nota (mismo valor y mismo
+  formato de fecha). HORA B es la hora del boletín según la hora de
+  Bogotá en que se corre: antes de la 1 p.m. -> "1:00 p.m.", desde
+  la 1 p.m. -> "6:00 p.m." (se usa hora de Bogotá, no la del
+  servidor, que corre en UTC). Tema_IA no está en la lista y por
+  tanto no se exporta en este formato, aunque se haya calculado.
+- Defensoría no se toca (su perfil no trae el formato boletín y su
+  salida queda como antes).
+
+## Novedades v1.10 (2026-10-31, pendiente de push; solo Secretaría)
+
+- Mismo Título => mismo Subtema_IA (garantía final determinista): dos
+  notas con el título idéntico, o levemente igual, ya no pueden quedar
+  con subtemas distintos. Causa: la unificación v4.31 tiene guarda de
+  fidelidad (si ningún subtema es fiel al título Y cuerpo de todas las
+  filas, no unifica) y después la guarda por fila y la puerta final
+  anti-copia vuelven a separar subtemas (reformulación LLM por grupo,
+  no determinista entre grupos). El nuevo pase final corre después de
+  la puerta anti-copia y antes de volcar, sin LLM y sin guarda de
+  fidelidad, y escribe el mismo subtema en las etiquetas de grupo y en
+  los ajustes por fila: nada posterior lo separa. Solo toca el subtema
+  (tono, tema, TIPO y GÉNERO quedan como están); hechos distintos que
+  solo comparten la marca no se unen.
+- Alias de respaldo (2026-10-31): 'Secretaría de' también vale si no
+  se encuentran 'Secretaría General de la Alcaldía de Bogotá' ni
+  'Secretaría General'. En la práctica, cualquier 'Secretaría de...'
+  cuenta como mención (la comparación no distingue mayúsculas ni
+  acentos). Los voceros Galán / Carlos Fernando Galán / Carlos Galán
+  / el alcalde ya estaban en el perfil desde v1.7; no se veían en la
+  app publicada porque v1.7-v1.10 siguen sin push (la app en vivo es
+  v1.6): al publicar v1.10, el campo Vocero(s) mostrará todos los
+  voceros del perfil por defecto.
+- Defensoría no se toca.

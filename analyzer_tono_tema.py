@@ -3854,6 +3854,158 @@ def unificar_etiquetas_titulos_similares(rows: List[dict], mapa: Dict[int, int],
     return cambios
 
 
+
+def unificar_subtema_titulo_final(rows: List[dict], mapa: Dict[int, int],
+                                   etiquetas: Dict[int, dict],
+                                   ajustes_subtema: Dict[int, str],
+                                   km: dict, brand: str = '',
+                                   aliases: Sequence[str] = ()) -> int:
+    """Pase FINAL determinista (v1.10): mismo Título => mismo Subtema_IA.
+
+    Regla del usuario (2026-10-31, caso real: dos notas con el título
+    idéntico «Restricciones en Cúcuta por Halloween: la Alcaldía expidió
+    un nuevo decreto que prohíbe las caravanas y fija un horario especial
+    para motocicletas» quedaron con subtemas levemente distintos): cuando
+    el texto de la columna Título es igual, o levemente igual, el subtema
+    debe ser el mismo. Corre DESPUÉS de la puerta final anti-copia y
+    ANTES de volcar, así nada posterior puede volver a separarlas. Es
+    determinista (sin LLM) y solo toca el subtema: tono, tema, TIPO y
+    GÉNERO quedan como están.
+
+    Por qué hacía falta pese a la garantía v4.31: `unificar_etiquetas_
+    titulos_similares` une por título, pero su canon de subtema tiene
+    guarda de fidelidad v4.35 (si ningún candidato es fiel al título Y
+    cuerpo de TODAS las filas del bloque, no unifica), y después la
+    guarda de fidelidad por fila y la puerta final anti-copia vuelven a
+    separar subtemas por fila/grupo (la reformulación LLM por grupo no
+    es determinista entre grupos). Este pase cierra esas tres vías: el
+    canon es el más frecuente del bloque (empate: el más largo, como
+    v4.15), sin guarda de fidelidad, y se escribe tanto en las etiquetas
+    de grupo como en los ajustes por fila que volcar aplica (así ni un
+    ajuste previo ni un grupo distinto lo rompen).
+
+    Bloques: (1) título normalizado idéntico (palabras de `words()`,
+    sin acentos/puntuación/mayúsculas) siempre se une, sin exigir
+    puente (un título corto y omnipresente también debe unirse si es
+    idéntico); (2) títulos levemente iguales con la misma señal que
+    v4.31/v4.50/v4.59 (token_set >= 80 con >= 2 palabras puente, o
+    >= 70 con >= 3, o puente >= 5 con token_set >= 60; marca/alias y
+    palabras omnipresentes del lote no cuentan como puente). A
+    diferencia de v4.31, aquí NO se exige que las filas sean de grupos
+    distintos: dos filas del mismo grupo con ajustes por fila distintos
+    también deben quedar con el mismo subtema si su título es igual o
+    similar. Las filas duplicadas (is_duplicate) no entran al bloque
+    (su subtema lo pone volcar). Si un bloque no trae ningún subtema
+    (todos vacíos), no se toca. Devuelve el número de filas cuyo
+    subtema final cambió.
+    """
+    from rapidfuzz import fuzz
+    if ajustes_subtema is None:
+        ajustes_subtema = {}
+    idx_validos = [i for i, r in enumerate(rows)
+                   if not r.get('is_duplicate') and sq(_titulo_fila(r, km))]
+    n = len(idx_validos)
+    if n < 2:
+        return 0
+    titulos = [sq(_titulo_fila(rows[i], km)) for i in idx_validos]
+    cont = [set(w for w in words(t) if w not in GENERIC_TITULO)
+            for t in titulos]
+    gid_de = [mapa.get(i) for i in idx_validos]
+    marca_toks = _tokens_marca(brand, aliases)
+    _df = Counter()
+    _tit_vistos = set()
+    for t, ws in zip(titulos, cont):
+        if t in _tit_vistos:
+            continue
+        _tit_vistos.add(t)
+        _df.update(ws)
+    _omni = {w for w, c in _df.items() if c > max(8, int(len(_tit_vistos) * 0.12))}
+    puente_ws = [ws - _omni - marca_toks for ws in cont]
+    par = list(range(n))
+
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    def uni(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            par[max(ra, rb)] = min(ra, rb)
+
+    # (1) Título normalizado idéntico: unión incondicional.
+    por_clave: Dict[str, int] = {}
+    for k, t in enumerate(titulos):
+        clave = ' '.join(words(t))
+        if not clave:
+            continue
+        if clave in por_clave:
+            uni(por_clave[clave], k)
+        else:
+            por_clave[clave] = k
+    # (2) Títulos levemente iguales: misma señal que v4.31/v4.50/v4.59.
+    inv: Dict[str, List[int]] = defaultdict(list)
+    for k, ws in enumerate(puente_ws):
+        for w in ws:
+            inv[w].append(k)
+    for k in range(n):
+        conteo: Dict[int, int] = defaultdict(int)
+        for w in puente_ws[k]:
+            for j in inv[w]:
+                if j > k:
+                    conteo[j] += 1
+        for j, inter in conteo.items():
+            if inter < 2:
+                continue
+            puente = _puente_titulos(puente_ws[k], puente_ws[j])
+            if puente < 2:
+                continue
+            s = fuzz.token_set_ratio(titulos[k], titulos[j], score_cutoff=70)
+            if (s >= 80) or (s >= 70 and puente >= 3):
+                uni(k, j)
+            elif puente >= 5:
+                s2 = fuzz.token_set_ratio(titulos[k], titulos[j])
+                if s2 >= 60:
+                    uni(k, j)
+
+    def _sub_final(i):
+        if i in ajustes_subtema and nz(ajustes_subtema[i]):
+            return ajustes_subtema[i]
+        gid = mapa.get(i)
+        return (etiquetas.get(gid) or {}).get('sub_tema') or ''
+
+    cambios = 0
+    buckets: Dict[int, List[int]] = defaultdict(list)
+    for k in range(n):
+        buckets[find(k)].append(k)
+    for miembros in buckets.values():
+        if len(miembros) < 2:
+            continue
+        filas = [idx_validos[k] for k in miembros]
+        gids = [gid_de[k] for k in miembros]
+        actuales = [_sub_final(i) for i in filas]
+        vals = [s for s in actuales if nz(s) and nz(s) != '-']
+        if not vals:
+            continue
+        c = Counter(vals)
+        top = c.most_common()
+        me = top[0][1]
+        cand = [v for v, q in top if q == me]
+        canon = max(cand, key=lambda s: (len(s.split()), len(s)))
+        for gid in set(gids):
+            if gid is None:
+                continue
+            e = etiquetas.setdefault(gid, {})
+            if e.get('sub_tema') != canon:
+                e['sub_tema'] = canon
+        for i, act in zip(filas, actuales):
+            if act != canon:
+                ajustes_subtema[i] = canon
+                cambios += 1
+    return cambios
+
+
 def _sanitizar_fusiones(fusiones, n):
     """Limpia la respuesta del modelo: >=2 índices distintos por grupo y sin
     repetir un índice en dos grupos (mapeo determinista).
@@ -5934,6 +6086,16 @@ def enrich_rows_with_ai(
     # v1.6: género por sección del dossier (solo si el perfil lo pide).
     if cfg.get('clasificar_tipo_genero'):
         aplicar_genero_por_seccion(rows, mapa, etiquetas, km)
+
+    # v1.10: garantía FINAL y determinista (2026-10-31): mismo Título
+    # (igual o levemente igual) => mismo Subtema_IA. Corre después de
+    # la puerta final anti-copia y antes de volcar, así nada posterior
+    # puede volver a separarlas. Sin LLM y sin guarda de fidelidad:
+    # para el título, la regla es absoluta y solo toca el subtema.
+    uni_sub_final = unificar_subtema_titulo_final(
+        rows, mapa, etiquetas, ajustes_fieles, km, brand=brand, aliases=aliases)
+    if uni_sub_final:
+        _ULTIMO_RESUMEN['subtema_titulo_final_unificado'] = uni_sub_final
 
     volcar_analisis_en_filas(
         rows, mapa, etiquetas, temas,

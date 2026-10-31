@@ -60,6 +60,7 @@ def _defaults() -> dict:
         "guia_subtema": "",
         "subtemas_fijos": [],
         "clasificar_tipo_genero": False,
+        "formato_boletin": False,
         "notas": "",
     }
 
@@ -86,6 +87,8 @@ def validar_perfil(data: dict) -> list:
             errores.append("'subtemas_fijos' debe ser una lista de {contiene, subtema} con textos no vacíos")
     if not isinstance(d["clasificar_tipo_genero"], bool):
         errores.append("'clasificar_tipo_genero' debe ser true/false")
+    if not isinstance(d["formato_boletin"], bool):
+        errores.append("'formato_boletin' debe ser true/false")
     tax = d["taxonomia"]
     if tax is not None:
         if not isinstance(tax, dict) or not isinstance(tax.get("temas"), list) \
@@ -114,6 +117,7 @@ def normalizar_perfil(data: dict) -> dict:
         and str(r.get("subtema") or "").strip()
     ]
     d["clasificar_tipo_genero"] = bool(d["clasificar_tipo_genero"])
+    d["formato_boletin"] = bool(d["formato_boletin"])
     d["notas"] = str(d["notas"] or "")
     if d["taxonomia"]:
         d["taxonomia"] = {

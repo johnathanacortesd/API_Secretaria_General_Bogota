@@ -261,8 +261,175 @@ HYPERLINK_TAIL_BYTES = 4 * 1024 * 1024
 MAX_FILAS_POR_DOSSIER = 1000
 
 
+
+# v1.9 (solo Secretaría, por perfil "formato_boletin"): orden exacto del
+# xlsx final para el boletín, más dos columnas nuevas. FECHA INFORME es
+# la misma Fecha de la nota; HORA B es la hora del boletín según la hora
+# de Bogotá en que se corre: antes de la 1 p.m. -> "1:00 p.m.", desde la
+# 1 p.m. -> "6:00 p.m." (dos boletines al día). En la pestaña estándar
+# la salida es EXACTAMENTE estas 25 columnas; en la personalizada van
+# estas 25 primero y después cualquier columna personalizada extra (para
+# no perder datos propios de esa pestaña). Tema_IA no está en la lista
+# y por tanto no se exporta en este formato, aunque se haya calculado.
+BOLETIN_COLUMNAS = [
+    "ID Noticia", "Fecha", "Medio", "Región", "Tipo de Medio",
+    "Sección - Programa", "Título", "Duración - Nro. Caracteres",
+    "CPE", "Audiencia", "Tier", "Tono_IA", "Subtema_IA", "TIPO", "GÉNERO",
+    "Link Nota", "texto", "Link Ext", "Web Ext", "FECHA INFORME", "HORA B",
+    "ID duplicada", "Contexto analizado", "Resumen - Aclaracion", "Audio",
+]
+
+
+def _zona_bogota():
+    """Zona horaria America/Bogota; si no hay tzdata, UTC-5 fijo
+    (Bogotá no tiene horario de verano, así que es equivalente)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo("America/Bogota")
+    except Exception:
+        return datetime.timezone(datetime.timedelta(hours=-5))
+
+
+def hora_boletin_bogota(ahora=None):
+    """Hora del boletín según la hora de Bogotá: antes de la 1 p.m.
+    -> "1:00 p.m."; a la 1 p.m. o después -> "6:00 p.m.". Si `ahora`
+    viene sin zona se asume Bogotá; con zona se convierte a Bogotá
+    (la app corre en un servidor en UTC, no en hora local)."""
+    zona = _zona_bogota()
+    if ahora is None:
+        ahora = datetime.datetime.now(zona)
+    elif ahora.tzinfo is None:
+        ahora = ahora.replace(tzinfo=zona)
+    else:
+        ahora = ahora.astimezone(zona)
+    return "1:00 p.m." if ahora.hour < 13 else "6:00 p.m."
+
 class LimiteFilasError(ValueError):
     """El dossier supera MAX_FILAS_POR_DOSSIER filas leídas."""
+
+# v1.8 (solo Secretaría): notas ya analizadas en Google Sheets. La app
+# compara el ID del dossier (columna "NoticiaId", normalizada a
+# "ID Noticia") con la columna "ID" de la hoja "Base, boletín SGB"
+# (primera hoja, "Mes actual") y solo procesa las notas que NO están
+# en la hoja. La hoja se lee en cada corrida vía exportación CSV
+# pública (sin inicio de sesión), igual que los mapas de región/
+# internet. Si la hoja no se puede leer y el filtro está activado,
+# la app se detiene con un mensaje claro en vez de reprocesar en
+# silencio (el usuario puede desactivar el filtro y procesar todo).
+SHEETS_ANALIZADAS_CSV_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1S-vvHrtjTzpJgtro9-rFAM8Isdh_WcAS1Ng5aEjYccg/export?format=csv"
+)
+
+
+class ErrorSheetsAnalizadas(ValueError):
+    """No se pudo leer la hoja de notas ya analizadas (o no trae columna ID)."""
+
+
+def normalizar_id(v):
+    """ID normalizado para comparar dossier vs Sheets; None si no hay ID.
+
+    Acepta int/float/str: 11714750, 11714750.0 y " 11714750 " comparan
+    igual. Un ID vacío, NaN o "nan"/"None" no se puede emparejar, así
+    que devuelve None y la fila se procesa (no se omite por duda).
+    """
+    if v is None:
+        return None
+    try:
+        import math
+        if isinstance(v, float) and math.isnan(v):
+            return None
+    except Exception:
+        pass
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    s = str(v).strip()
+    if not s or s.lower() in ("nan", "none", "nat"):
+        return None
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
+
+
+def _columna_id_dossier(df):
+    """Nombre de la columna de ID del dossier, o None si no la trae.
+
+    Acepta "NoticiaId" y "ID Noticia" (exactos) y, como respaldo,
+    cualquier columna cuyo nombre normalizado (sin espacios, en
+    minúsculas) sea "noticiaid" o "idnoticia".
+    """
+    for cand in ("NoticiaId", "ID Noticia"):
+        if cand in df.columns:
+            return cand
+    for c in df.columns:
+        k = str(c).replace(" ", "").replace("_", "").lower()
+        if k in ("noticiaid", "idnoticia"):
+            return c
+    return None
+
+
+def cargar_ids_analizados_desde_sheets(url=None):
+    """Lee la columna ID de la hoja de notas ya analizadas y devuelve
+    el conjunto de IDs normalizados. Sin caché: cada corrida lee la
+    hoja actual (el usuario puede agregar notas analizadas entre
+    corridas). Lanza ErrorSheetsAnalizadas si no se puede leer o si
+    no trae columna ID."""
+    url = url or SHEETS_ANALIZADAS_CSV_URL
+    # v1.8-rendimiento: la hoja trae 32 mil filas y 21 columnas, pero solo
+    # hace falta la columna ID. Se pide solo esa columna (usecols) para
+    # no parsear ni cargar en memoria títulos y resúmenes de 32 mil
+    # notas; la descarga en sí es la misma (Google no permite descargar
+    # una sola columna), pero el parseo pasa de 21 columnas a 1. Si la
+    # columna no se llama exactamente "ID", se hace la lectura completa
+    # y la búsqueda tolerante de antes.
+    try:
+        try:
+            df = pd.read_csv(url, dtype=str, usecols=["ID"])
+            id_col = "ID"
+        except ValueError:
+            df = pd.read_csv(url, dtype=str)
+            id_col = None
+            for c in df.columns:
+                if str(c).strip().lower() == "id":
+                    id_col = c
+                    break
+            if id_col is None:
+                raise ErrorSheetsAnalizadas(
+                    "La hoja de notas ya analizadas no trae una columna 'ID'."
+                )
+    except ErrorSheetsAnalizadas:
+        raise
+    except Exception as exc:
+        raise ErrorSheetsAnalizadas(
+            "No se pudo leer la hoja de notas ya analizadas en Google Sheets. "
+            "Revisa que esté compartida como 'Cualquier persona con el enlace "
+            "puede ver' o desactiva el filtro para procesar todas las notas."
+        ) from exc
+    ids = set()
+    for v in df[id_col]:
+        n = normalizar_id(v)
+        if n is not None:
+            ids.add(n)
+    return ids
+
+
+def filtrar_ids_analizados(df, ids_set):
+    """Quita del dossier las filas cuyo ID ya está analizado.
+
+    Devuelve (df_filtrado, n_omitidas, aplicado, tiene_col_id). Si el
+    dossier no trae columna de ID, no se omite nada (aplicado=False)
+    y se procesa todo: sin ID no se puede probar que una nota ya
+    esté analizada. Las filas sin ID tampoco se omiten nunca."""
+    col = _columna_id_dossier(df)
+    if col is None:
+        return df, 0, False, False
+    normas = df[col].map(normalizar_id)
+    mask = normas.map(lambda x: x is not None and x in ids_set)
+    n_omit = int(mask.sum())
+    if n_omit:
+        df = df[~mask].reset_index(drop=True)
+    return df, n_omit, True, True
+
 
 
 def _fmt_miles(n: int) -> str:
@@ -880,6 +1047,8 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
                                criterio_texto="", taxonomia=None, guia_subtema="",
                                subtemas_fijos=None,
                                clasificar_tipo_genero=False,
+                               formato_boletin=False,
+                               excluir_analizados=True,
                                cubos_objetivo=16, votos=2, tam_lote=10,
                                workers=8, umbral_titulo=92, umbral_cuerpo=85):
     """ai_config de la pestaña "Columnas personalizadas" (v4.27/v4.28).
@@ -903,6 +1072,8 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
         "guia_subtema": (guia_subtema or "").strip(),
         "subtemas_fijos": list(subtemas_fijos or []),
         "clasificar_tipo_genero": bool(clasificar_tipo_genero),
+        "formato_boletin": bool(formato_boletin),
+        "excluir_analizados": bool(excluir_analizados),
         "taxonomia": taxonomia if taxonomia is not None
                      else "Automática según el archivo (recomendada)",
         "cubos_objetivo": int(cubos_objetivo),
@@ -1175,7 +1346,7 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
             cv = None
             url = None
 
-            if h == "Fecha" and val is not None and not isinstance(val, dict) and pd.notna(val):
+            if h in ("Fecha", "FECHA INFORME") and val is not None and not isinstance(val, dict) and pd.notna(val):
                 if isinstance(val, pd.Timestamp):
                     cv = val.to_pydatetime()
                 elif isinstance(val, (datetime.datetime, datetime.date)):
@@ -1223,9 +1394,9 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
                     ws.write(excel_row, cidx, display, url_fmt)
             elif h in ("ID Noticia", "ID duplicada") and isinstance(cv, int):
                 ws.write_number(excel_row, cidx, cv, fmt_plain_id)
-            elif h == "Fecha" and isinstance(cv, datetime.datetime):
+            elif h in ("Fecha", "FECHA INFORME") and isinstance(cv, datetime.datetime):
                 ws.write_datetime(excel_row, cidx, cv, fmt_date)
-            elif h == "Fecha" and isinstance(cv, datetime.date):
+            elif h in ("Fecha", "FECHA INFORME") and isinstance(cv, datetime.date):
                 ws.write_datetime(
                     excel_row,
                     cidx,
@@ -1312,6 +1483,28 @@ def process_dossier(
 
     df_normalized = load_dossier_dataframe(file_bytes, progress=progress)
     del file_bytes
+
+    # v1.8: filtro de notas ya analizadas (Google Sheets), ANTES del
+    # límite: el límite aplica a las notas NUEVAS, no al total del
+    # archivo (las omitidas no consumen llamadas a la API).
+    omitidas_analizadas = 0
+    omitidas_aplicado = False
+    omitidas_tiene_col_id = False
+    if ai_config and ai_config.get("excluir_analizados") \
+            and ai_config.get("ids_analizados") is not None:
+        df_normalized, omitidas_analizadas, omitidas_aplicado, \
+            omitidas_tiene_col_id = filtrar_ids_analizados(
+                df_normalized, set(ai_config.get("ids_analizados") or set()))
+        if omitidas_aplicado:
+            emit_progress(
+                progress, 2,
+                f"Notas ya analizadas omitidas (Google Sheets): "
+                f"{_fmt_miles(omitidas_analizadas)}; se procesan las nuevas.")
+        elif not omitidas_tiene_col_id:
+            emit_progress(
+                progress, 2,
+                "Sin columna de ID en el dossier: no se pudo aplicar el "
+                "filtro de notas ya analizadas; se procesa todo el archivo.")
 
     # v4.45: límite de seguridad, antes de cualquier procesamiento o
     # análisis. Si el XLSX trae más filas de las permitidas, se detiene con
@@ -1416,6 +1609,17 @@ def process_dossier(
     rows.sort(key=lambda r: (norm_key(r.get(KEY_MAP.get("titulo", "Título"), "")),
                              str(r.get(KEY_MAP.get("idnoticia", "ID Noticia"), ""))))
 
+    # v1.9: formato boletín (solo si el perfil lo trae). FECHA INFORME es
+    # la Fecha de la nota y HORA B es la del boletín según la hora de
+    # Bogotá en que se corre; ambas se fijan aquí, cuando las filas ya
+    # están finales y ordenadas, justo antes de exportar.
+    if ai_extra.get("formato_boletin"):
+        _hora_b = hora_boletin_bogota()
+        _fecha_k = KEY_MAP.get("fecha", "Fecha")
+        for _r in rows:
+            _r["FECHA INFORME"] = _r.get(_fecha_k)
+            _r["HORA B"] = _hora_b
+
     cols_to_export = output_columns_for_export(
         include_ai=has_ai or has_pkl,
         include_tema=ai_extra.get("incluir_tema", True),
@@ -1441,6 +1645,15 @@ def process_dossier(
             include_tipo_genero=has_ai and bool(ai_extra.get("clasificar_tipo_genero")),
             audiencia_antes_de_tier=not _es_perfil_fenavi(ai_config),
         )
+    # v1.9: en formato boletín, la salida estándar es exactamente las 25
+    # columnas; en la personalizada van las 25 primero y después las
+    # columnas personalizadas extra que no estén en la lista.
+    if ai_extra.get("formato_boletin"):
+        if (ai_config or {}).get("preservar_columnas"):
+            _extras = [c for c in cols_to_export if c not in BOLETIN_COLUMNAS]
+            cols_to_export = list(BOLETIN_COLUMNAS) + _extras
+        else:
+            cols_to_export = list(BOLETIN_COLUMNAS)
 
     emit_progress(progress, 94, "✓ Estructuración finalizada. Generando archivo Excel…")
 
@@ -1476,6 +1689,8 @@ def process_dossier(
         "total_rows": total_rows,
         "unique_rows": unique_rows,
         "duplicates": total_rows - unique_rows,
+        "omitidas_analizadas": omitidas_analizadas,
+        "omitidas_analizadas_aplicado": omitidas_aplicado,
         "process_duration": f"{duration:.2f}s",
         "medios_sin_mapear": medios_sin_region,
         "analisis": analisis,
