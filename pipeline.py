@@ -275,9 +275,21 @@ BOLETIN_COLUMNAS = [
     "ID Noticia", "Fecha", "Medio", "Región", "Tipo de Medio",
     "Sección - Programa", "Título", "Duración - Nro. Caracteres",
     "CPE", "Audiencia", "Tier", "Tono_IA", "Subtema_IA", "TIPO", "GÉNERO",
-    "Link Nota", "texto", "Link Ext", "Web Ext", "FECHA INFORME", "HORA B",
+    "Link Nota", "texto", "Link (Streaming - Imagen)", "Link Ext",
+    "FECHA INFORME", "HORA B",
     "ID duplicada", "Contexto analizado", "Resumen - Aclaracion", "Audio",
 ]
+
+
+def columnas_boletin(include_tipo_genero=True):
+    # Lista del boletín: completa para Secretaría (con TIPO y GÉNERO) y
+    # sin esas dos para Defensoría (que no las clasifica). v1.11: "Link
+    # (Streaming - Imagen)" en vez de "Web Ext" (corrección del usuario
+    # 2026-10-31: el xlsx final lleva el enlace de streaming, no la web
+    # externa).
+    if include_tipo_genero:
+        return list(BOLETIN_COLUMNAS)
+    return [c for c in BOLETIN_COLUMNAS if c not in ("TIPO", "GÉNERO")]
 
 
 def _zona_bogota():
@@ -390,7 +402,8 @@ def cargar_ids_analizados_desde_sheets(url=None):
             df = pd.read_csv(url, dtype=str)
             id_col = None
             for c in df.columns:
-                if str(c).strip().lower() == "id":
+                _k = str(c).replace(" ", "").replace("_", "").lower()
+                if _k in ("id", "idnoticia", "noticiaid"):
                     id_col = c
                     break
             if id_col is None:
@@ -1649,11 +1662,13 @@ def process_dossier(
     # columnas; en la personalizada van las 25 primero y después las
     # columnas personalizadas extra que no estén en la lista.
     if ai_extra.get("formato_boletin"):
+        _cols_boletin = columnas_boletin(
+            bool(ai_extra.get("clasificar_tipo_genero")))
         if (ai_config or {}).get("preservar_columnas"):
-            _extras = [c for c in cols_to_export if c not in BOLETIN_COLUMNAS]
-            cols_to_export = list(BOLETIN_COLUMNAS) + _extras
+            _extras = [c for c in cols_to_export if c not in _cols_boletin]
+            cols_to_export = list(_cols_boletin) + _extras
         else:
-            cols_to_export = list(BOLETIN_COLUMNAS)
+            cols_to_export = list(_cols_boletin)
 
     emit_progress(progress, 94, "✓ Estructuración finalizada. Generando archivo Excel…")
 

@@ -74,7 +74,7 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
 
 ## Archivos
 
-- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.10)
+- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.11)
 - `resumen_informe.py` — lectura de primera hoja, conteos y redacción
 - `clientes/` — solo el perfil de este cliente
 - `analyzer_tono_tema.py`, `pipeline.py`, `ai_analyzer.py`,
@@ -242,4 +242,19 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
   app publicada porque v1.7-v1.10 siguen sin push (la app en vivo es
   v1.6): al publicar v1.10, el campo Vocero(s) mostrará todos los
   voceros del perfil por defecto.
+- Defensoría no se toca.
+
+## Novedades v1.11 (2026-10-31, pendiente de push; solo Secretaría)
+
+- Corrección del orden del xlsx final (pedido del usuario 2026-10-31):
+  entra "Link (Streaming - Imagen)" entre "texto" y "Link Ext", y sale
+  "Web Ext". El orden queda: ID Noticia, Fecha, Medio, Región, Tipo de
+  Medio, Sección - Programa, Título, Duración - Nro. Caracteres, CPE,
+  Audiencia, Tier, Tono_IA, Subtema_IA, TIPO, GÉNERO, Link Nota, texto,
+  Link (Streaming - Imagen), Link Ext, FECHA INFORME, HORA B,
+  ID duplicada, Contexto analizado, Resumen - Aclaracion, Audio.
+  (El usuario lo escribió como "Link (Streaming"; se usa la columna
+  existente "Link (Streaming - Imagen".)
+- La detección de la columna ID de la hoja ya analizadas ahora acepta
+  también "ID Noticia" y "NoticiaId" (antes solo "ID").
 - Defensoría no se toca.
