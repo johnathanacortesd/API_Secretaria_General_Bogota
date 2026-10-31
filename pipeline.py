@@ -1376,6 +1376,24 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
 
         excel_row = i + 1
         for cidx, h in enumerate(cols):
+            # v1.17/v1.13: columna "ENLACE" como TEXTO PLANO (por pedido
+            # del usuario, para ambos repos): el enlace se escribe tal
+            # cual, sin hipervínculo. Aplica a cualquier capitalización
+            # ("ENLACE", "Enlace", "enlace"). Se usa write_string a
+            # propósito: write() convertiría la URL en hipervínculo
+            # automáticamente. No toca Link Nota, Link Ext, Web Ext ni
+            # Audio, que siguen como hipervínculos.
+            if isinstance(h, str) and h.strip().lower() == "enlace":
+                _v = row.get(h)
+                if isinstance(_v, dict):
+                    _t = _v.get("url") or _v.get("value") or ""
+                else:
+                    _t = _v
+                if _t is None or str(_t).strip() in ("", "nan", "None", "-"):
+                    ws.write_blank(excel_row, cidx, None)
+                else:
+                    ws.write_string(excel_row, cidx, str(_t))
+                continue
             # v4.57: "Link Ext" y "Web Ext" con el enlace completo a la
             # noticia, mostrado completo y clicable (como "Audio").
             if h in ("Link Ext", "Web Ext"):
