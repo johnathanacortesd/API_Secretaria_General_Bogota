@@ -74,7 +74,7 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
 
 ## Archivos
 
-- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.11)
+- `app.py` — interfaz (Grill v4.67 + sección Resumen, versión visible v1.15)
 - `resumen_informe.py` — lectura de primera hoja, conteos y redacción
 - `clientes/` — solo el perfil de este cliente
 - `analyzer_tono_tema.py`, `pipeline.py`, `ai_analyzer.py`,
@@ -258,3 +258,75 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
 - La detección de la columna ID de la hoja ya analizadas ahora acepta
   también "ID Noticia" y "NoticiaId" (antes solo "ID").
 - Defensoría no se toca.
+
+## Novedades v1.12 (2026-10-31, nunca pusheada; incluida en v1.13; solo Secretaría)
+
+- Foco exacto del perfil (corrección del usuario 2026-10-31): aliases
+  SOLO "Secretaría General", "Secretaría General de la Alcaldía de
+  Bogotá" y "Alcaldía de Bogotá"; voceros Miguel Silva Moyano, Miguel
+  Silva, Carlos Fernando Galán, Galán, Carlos Galán, el alcalde. Salen
+  "Alcaldía Mayor de Bogotá", "Secretaría General de Bogotá",
+  "Secretaría General de la Alcaldía Mayor de Bogotá", "Distrito
+  Capital", "Administración Distrital", "SGB", "Bogotá Camina Segura"
+  y el alias de respaldo "Secretaría de" (que hacía valer CUALQUIER
+  "Secretaría de..." y metía notas ajenas a la Secretaría General).
+  Auditoría previa: el motor ya era idéntico al de API_2_Grill salvo
+  las adiciones documentadas (umbral 3→2 para siglas, 'alerta',
+  TIPO/GÉNERO, fix de título, filtro Sheets, boletín, Resumen); la
+  agrupación no se tocó: el problema era el foco, no el motor.
+- Tono: regla general determinista (vale para cualquier cliente):
+  decreto/resolución/acuerdo/ordenanza sin crítica = Neutro (baja
+  Negativo a Neutro; con crítica o léxico de falla/incumplimiento se
+  respeta el Negativo; no toca Positivos). Corre al final, después de
+  la auditoría Jev y de toda canonización de tono.
+- Velocidad: las auditorías Jev (tono por grupo y temas por subtema
+  distinto) eran secuenciales y dominaban el tiempo de 123 notas
+  (más de 5 minutos). Ahora corren en paralelo con los mismos workers
+  (8); las llamadas, los resultados por grupo y el orden de aplicación
+  son idénticos: solo cambia el tiempo, no la calidad. Los lotes
+  principales ya eran paralelos; el fetch de Sheets y el Resumen son
+  segundos y no eran el cuello de botella.
+- Defensoría no se toca.
+
+## Novedades v1.13 (2026-10-31, nunca pusheada; incluida en v1.14; solo Secretaría)
+
+- Incluye todo lo de v1.12 (foco exacto, regla decreto, Jev paralelo),
+  que nunca se pusheó.
+- Web Ext vuelve al xlsx del boletín como ÚLTIMA columna (tras Audio):
+  Secretaría 26 columnas, Defensoría 24. (v1.11 la había sacado; el
+  usuario la necesita para ver la URL web de la nota.)
+- GÉNERO por URL web: si la Web Ext trae /opinion/, /columna(s)/ o
+  /editorial/ y el grupo quedó como Noticia, la fila pasa a Opinión
+  (ejemplo real: https://elpilon.com.co/opinion/columnas/caradura-este-senor
+  ya no queda como Noticia). Solo sube Noticia a Opinión; nunca toca
+  Entrevista, Opinión ni duplicadas. Mismo criterio del rescate por
+  Sección, pero con la evidencia de la URL.
+- Fidelidad FINAL por fila (lo grave de la agrupación): la guarda
+  v4.35/v4.50 corría ANTES de la puerta anti-copia y del pase
+  título-final, y esos dos reescriben subtemas sin re-verificar por
+  fila (el título-final impone el canon sin guarda). Ahora, justo
+  antes de volcar, cada fila vuelve a verificarse con el mismo cotejo
+  (nombre propio + asunto en SU título/cuerpo): si el subtema final
+  no corresponde a esa fila, recupera su especificidad con un rótulo
+  de su propio titular (o 'Hecho informativo'). No rompe título
+  idéntico = mismo subtema cuando el canon sí corresponde a cada fila;
+  solo separa la fila cuyo cuerpo prueba otro hecho distinto. No toca
+  tono, tema ni la etiqueta del grupo.
+- Defensoría no se toca (salvo el motor compartido, que es idéntico).
+
+## Novedades v1.14 (2026-10-31, nunca pusheada; incluida en v1.15; solo Secretaría)
+
+- Incluye todo lo de v1.13 (nunca pusheada).
+- Sin cambio de HORA B para Secretaría: sigue "1:00 p.m." antes de la 1
+  p.m. de Bogotá y "6:00 p.m." desde la 1 p.m. El campo nuevo es
+  genérico (ver Defensoría v1.10) y aquí queda explícito en "6:00 p.m.".
+- Defensoría no se toca (salvo el motor compartido, que es idéntico).
+
+## Novedades v1.15 (2026-10-31, pendiente de push; solo Secretaría)
+
+- Incluye todo lo de v1.14 (nunca pusheada).
+- Sin cambio de HORA B para Secretaría: sigue corte 13, antes
+  "1:00 p.m.", después "6:00 p.m.". El horario del boletín ahora es
+  un campo genérico de perfil (ver Defensoría v1.11) y aquí queda
+  explícito con los valores de siempre.
+- Defensoría no se toca (salvo el motor compartido, que es idéntico).

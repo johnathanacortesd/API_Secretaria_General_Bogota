@@ -2319,8 +2319,20 @@ def etiquetar_grupos(cfg: dict, grupos: List[dict], progress: Optional[Callable]
     # Jev decide el tono aspectual sobre la entidad; el LLM existente conserva
     # la generación de subtema y el resto del flujo.
     if cfg.get('typesafe_api_key'):
+        # v1.12/v1.8 (2026-10-31): la auditoría Jev era secuencial (una
+        # llamada por grupo) y dominaba el tiempo de 123 notas. Ahora corre
+        # en paralelo con los mismos workers; las llamadas y los resultados
+        # por grupo son idénticos, y la aplicación sigue en orden de grupo.
+        _tonos_jev = {}
+        with ThreadPoolExecutor(max_workers=max(1, int(workers))) as ex:
+            _futs = {ex.submit(_tono_con_jev, cfg, g): g['grupo'] for g in grupos}
+            for _fut in as_completed(_futs):
+                try:
+                    _tonos_jev[_futs[_fut]] = _fut.result()
+                except Exception:
+                    _tonos_jev[_futs[_fut]] = None
         for g in grupos:
-            tono_jev = _tono_con_jev(cfg, g)
+            tono_jev = _tonos_jev.get(g['grupo'])
             if tono_jev:
                 etiquetas[g['grupo']]['tono'] = tono_jev
         _ULTIMO_RESUMEN['motor_tono'] = 'jev'
@@ -3137,6 +3149,51 @@ def aplicar_guarda_fidelidad_subtema(rows: List[dict], mapa: Dict[int, int],
         if not _etiqueta_fiel_a_texto(sub, tit, txt, brand, aliases) \
                 or not _asunto_fiel_a_texto(sub, tit, txt, brand, aliases):
             nuevo = _subtema_desde_titulo(tit)
+            if nz(nuevo) != nz(sub):
+                ajustes[i] = nuevo
+    return ajustes
+
+
+def aplicar_fidelidad_final_subtema(rows, mapa, etiquetas, ajustes_subtema,
+                                    km, brand='', aliases=()):
+    """Red de seguridad FINAL (v1.13/v1.9, 2026-10-31): ningún Subtema_IA
+    llega al Excel si no corresponde a SU fila.
+
+    Reaplica, sobre el subtema FINAL de cada fila (etiqueta de grupo o
+    ajuste por fila vigente), el mismo cotejo de la guarda v4.35/v4.50
+    (nombre propio + asunto: stems distintivos en título/cuerpo de ESA
+    fila). Hacía falta porque esa guarda corre ANTES de la puerta
+    anti-copia y del pase título-final, y esos dos reescriben subtemas
+    sin volver a verificar fidelidad por fila: el título-final impone
+    el canon del bloque sin guarda, y la reformulación anti-copia es por
+    grupo. Si el subtema final no es fiel, la fila recupera su
+    especificidad con un rótulo derivado de su propio titular (o 'Hecho
+    informativo'). Solo toca el subtema por fila: nunca el tono, el
+    tema ni la etiqueta del grupo. Por eso NO rompe la regla título
+    idéntico = mismo subtema cuando el canon sí corresponde a cada
+    fila; solo separa la fila cuyo cuerpo prueba otro hecho distinto.
+    Devuelve el dict de ajustes actualizado.
+    """
+    ajustes = dict(ajustes_subtema or {})
+    for i, row in enumerate(rows):
+        if row.get('is_duplicate'):
+            continue
+        gid = mapa.get(i)
+        # gid=0 es un id válido (el motor real numera desde 1, pero no se
+        # asume): solo None significa "sin grupo". El `if gid` de la guarda
+        # original lo trataría como ausente y saltaría la fila.
+        e = etiquetas.get(gid) if gid is not None else {}
+        if i in ajustes and nz(ajustes[i]):
+            sub = ajustes[i]
+        else:
+            sub = (e.get('sub_tema') or '').strip()
+        if not sub or nz(sub) == 'hecho informativo':
+            continue
+        tit = _titulo_fila(row, km)
+        txt = _texto_fila(row, km)
+        if not _etiqueta_fiel_a_texto(sub, tit, txt, brand, aliases) \
+                or not _asunto_fiel_a_texto(sub, tit, txt, brand, aliases):
+            nuevo = _subtema_desde_titulo(tit) or 'Hecho informativo'
             if nz(nuevo) != nz(sub):
                 ajustes[i] = nuevo
     return ajustes
@@ -5282,7 +5339,7 @@ def _tema_con_jev(cfg: dict, tema: str, sub_tema: str, titulo: str,
 
 
 def corregir_temas_con_jev(cfg: dict, grupos: Sequence[dict], etiquetas: Dict[int, dict],
-                           temas: Dict[int, str]) -> List[int]:
+                           temas: Dict[int, str], workers: int = WORKERS_DEFECTO) -> List[int]:
     """Alta confianza ⇒ corrige el tema. Baja confianza ⇒ deja y marca revisión.
 
     Jev no genera subtemas y no reemplaza el pipeline de tono.
@@ -5296,6 +5353,37 @@ def corregir_temas_con_jev(cfg: dict, grupos: Sequence[dict], etiquetas: Dict[in
         clave = nz(e.get('sub_tema'))
         if clave and clave not in por_sub:
             por_sub[clave] = g['grupo']
+    # v1.12/v1.8 (2026-10-31): la verificación Jev de temas también era
+    # secuencial (una llamada por subtema distinto). Se precalcula en
+    # paralelo con las mismas entradas (tema tras el relleno determinista)
+    # y el bucle de abajo aplica los resultados en el mismo orden y con
+    # la misma lógica; si un pre-cálculo falta, se llama en línea.
+    _ver_pre = {}
+    if (cfg.get('typesafe_api_key') or '').strip():
+        def _verificar(_gid):
+            try:
+                _g0 = por_gid.get(_gid) or {}
+                _e0 = etiquetas.get(_gid) or {}
+                _t0 = temas.get(_gid)
+                if not _tema_util(_t0):
+                    _t0 = _asegurar_tema_texto(
+                        '', [_e0.get('sub_tema', '')], [_g0.get('titulo')],
+                        [_g0.get('contexto') or _g0.get('texto')])
+                if not tema_frase_natural(_t0, titulos=[_g0.get('titulo')]):
+                    return _gid, (False, None)
+                return _gid, (True, _tema_con_jev(
+                    cfg, _t0, _e0.get('sub_tema', ''), _g0.get('titulo'),
+                    _g0.get('contexto') or _g0.get('texto')))
+            except Exception:
+                return _gid, (None, None)
+        with ThreadPoolExecutor(max_workers=max(1, int(workers))) as _ex:
+            for _fut in as_completed(
+                    [ _ex.submit(_verificar, _gid) for _gid in por_sub.values() ]):
+                try:
+                    _gid, _val = _fut.result()
+                    _ver_pre[_gid] = _val
+                except Exception:
+                    pass
     umbral = float(cfg.get('jev_confianza_min', 0.75) or 0.75)
     revisar, corregidos = [], []
     for gid in por_sub.values():
@@ -5308,12 +5396,21 @@ def corregir_temas_con_jev(cfg: dict, grupos: Sequence[dict], etiquetas: Dict[in
                 [g.get('contexto') or g.get('texto')])
             temas[gid] = lleno
             tema = lleno
-        if not tema_frase_natural(tema, titulos=[g.get('titulo')]):
+        # Ver precalculado en paralelo (o llamada original si falta).
+        _pre = _ver_pre.get(gid)
+        if _pre is None:
+            _natural = tema_frase_natural(tema, titulos=[g.get('titulo')])
+            ver = (_tema_con_jev(cfg, tema, e.get('sub_tema', ''), g.get('titulo'),
+                                 g.get('contexto') or g.get('texto'))
+                   if _natural else None)
+        elif _pre[0] is False:
+            _natural, ver = False, None
+        else:
+            _natural, ver = True, _pre[1]
+        if not _natural:
             malo, conf = True, 1.0
             ver = None
         else:
-            ver = _tema_con_jev(cfg, tema, e.get('sub_tema', ''), g.get('titulo'),
-                                g.get('contexto') or g.get('texto'))
             if not ver:
                 if not _tema_util(temas.get(gid)):
                     temas[gid] = _asegurar_tema_texto(
@@ -6045,7 +6142,7 @@ def enrich_rows_with_ai(
     if incluir_tema and theme_model is None:
         tax_lote = {'temas': candidatos_tax, 'reglas': derivar_reglas(candidatos_tax) if candidatos_tax else []}
         temas, origen = asignar_temas(cfg, grupos, etiquetas, tax_lote, progreso, uso=uso)
-        corregir_temas_con_jev(cfg, grupos, etiquetas, temas)
+        corregir_temas_con_jev(cfg, grupos, etiquetas, temas, workers=workers)
 
     # PKL gana sobre LLM/lote. NUNCA reemplaza el subtema. El gate de frases
     # del lote no reescribe las clases del cliente (antes las sustituía).
@@ -6096,6 +6193,25 @@ def enrich_rows_with_ai(
         rows, mapa, etiquetas, ajustes_fieles, km, brand=brand, aliases=aliases)
     if uni_sub_final:
         _ULTIMO_RESUMEN['subtema_titulo_final_unificado'] = uni_sub_final
+
+    # v1.12/v1.8 (2026-10-31): decretos sin crítica = Neutro. Corre al
+    # final, después de toda canonización de tono, para que ningún voto
+    # posterior lo devuelva a Negativo. Solo toca el tono, no el subtema.
+    _bajados_decreto = aplicar_regla_decreto(grupos, etiquetas)
+    if _bajados_decreto:
+        _ULTIMO_RESUMEN['tono_decreto_neutralizado'] = _bajados_decreto
+
+    # v1.13/v1.9 (2026-10-31): fidelidad FINAL por fila (ver
+    # aplicar_fidelidad_final_subtema). Es el último pase que toca el
+    # subtema antes de volcar: nada posterior puede volver a imponer un
+    # subtema ajeno a la fila.
+    _previos_fieles = dict(ajustes_fieles)
+    ajustes_fieles = aplicar_fidelidad_final_subtema(
+        rows, mapa, etiquetas, ajustes_fieles, km, brand=brand, aliases=aliases)
+    _nuevos_fieles = sum(1 for _i, _v in ajustes_fieles.items()
+                         if _previos_fieles.get(_i) != _v)
+    if _nuevos_fieles:
+        _ULTIMO_RESUMEN['subtemas_fidelidad_final_corregidos'] = _nuevos_fieles
 
     volcar_analisis_en_filas(
         rows, mapa, etiquetas, temas,
@@ -6920,6 +7036,42 @@ def aplicar_regla_tragedia(grupos: Sequence[dict], etiquetas: Dict[int, dict],
         if _experto_casa_citado(texto, actores):
             e['tono'] = 'Neutro'
             bajados.append(g.get('grupo'))
+    return bajados
+
+
+_DECRETO_PAT = re.compile(r'\b(decreto|resoluci[óo]n|acuerdo|ordenanza)\b', re.IGNORECASE)
+_CRITICA_DECRETO_STEMS = (
+    'critic', 'cuestion', 'rechaz', 'denunc', 'acus', 'sancion', 'polemic',
+    'inconform', 'protest', 'repudi', 'conden', 'irregular', 'corrup',
+    'abus', 'neglig', 'fracas', 'fall', 'reclam', 'quej', 'demand',
+    'escandal', 'tutel', 'incumpl', 'deficien', 'error', 'equivoc',
+    'retras', 'señalam', 'reproch', 'censur', 'objec', 'vulner', 'amenaz',
+    'carencia',
+)
+
+
+def aplicar_regla_decreto(grupos, etiquetas):
+    """Acto normativo sin crítica = Neutro (regla general, 2026-10-31).
+
+    Un decreto, resolución, acuerdo u ordenanza que prohíbe, establece,
+    fija, crea o regula algo es una actuación institucional neutra hacia
+    la marca: si el tono quedó Negativo pero el texto no trae ninguna
+    crítica dirigida, se baja a Neutro. Con crítica explícita (o léxico
+    de falla/incumplimiento) se respeta el Negativo. No toca Positivos
+    ni Neutros. Vale para cualquier cliente, no solo Secretaría.
+    """
+    bajados = []
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or e.get('tono') != 'Negativo':
+            continue
+        texto = '%s. %s' % (g.get('titulo', ''), g.get('contexto') or g.get('texto', ''))
+        if not _DECRETO_PAT.search(texto):
+            continue
+        if any(s in nz(texto) for s in _CRITICA_DECRETO_STEMS):
+            continue
+        e['tono'] = 'Neutro'
+        bajados.append(g.get('grupo'))
     return bajados
 
 

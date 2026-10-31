@@ -61,6 +61,9 @@ def _defaults() -> dict:
         "subtemas_fijos": [],
         "clasificar_tipo_genero": False,
         "formato_boletin": False,
+        "hora_boletin_corte": 13,
+        "hora_boletin_antes": "1:00 p.m.",
+        "hora_boletin_despues": "6:00 p.m.",
         "notas": "",
     }
 
@@ -89,6 +92,11 @@ def validar_perfil(data: dict) -> list:
         errores.append("'clasificar_tipo_genero' debe ser true/false")
     if not isinstance(d["formato_boletin"], bool):
         errores.append("'formato_boletin' debe ser true/false")
+    _corte = d["hora_boletin_corte"]
+    if isinstance(_corte, bool) or not isinstance(_corte, int) or not (0 <= _corte <= 23):
+        errores.append("'hora_boletin_corte' debe ser una hora entera 0-23")
+    if not isinstance(d["hora_boletin_antes"], str) or not isinstance(d["hora_boletin_despues"], str):
+        errores.append("'hora_boletin_antes' y 'hora_boletin_despues' deben ser textos como '4:00 p.m.'")
     tax = d["taxonomia"]
     if tax is not None:
         if not isinstance(tax, dict) or not isinstance(tax.get("temas"), list) \
@@ -118,6 +126,13 @@ def normalizar_perfil(data: dict) -> dict:
     ]
     d["clasificar_tipo_genero"] = bool(d["clasificar_tipo_genero"])
     d["formato_boletin"] = bool(d["formato_boletin"])
+    _corte = d["hora_boletin_corte"]
+    d["hora_boletin_corte"] = _corte if (isinstance(_corte, int)
+        and not isinstance(_corte, bool) and 0 <= _corte <= 23) else 13
+    d["hora_boletin_antes"] = (str(d["hora_boletin_antes"] or "1:00 p.m.").strip()
+                               or "1:00 p.m.")
+    d["hora_boletin_despues"] = (str(d["hora_boletin_despues"] or "6:00 p.m.").strip()
+                                 or "6:00 p.m.")
     d["notas"] = str(d["notas"] or "")
     if d["taxonomia"]:
         d["taxonomia"] = {

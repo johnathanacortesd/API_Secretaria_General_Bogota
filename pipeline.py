@@ -278,6 +278,7 @@ BOLETIN_COLUMNAS = [
     "Link Nota", "texto", "Link (Streaming - Imagen)", "Link Ext",
     "FECHA INFORME", "HORA B",
     "ID duplicada", "Contexto analizado", "Resumen - Aclaracion", "Audio",
+    "Web Ext"
 ]
 
 
@@ -302,11 +303,17 @@ def _zona_bogota():
         return datetime.timezone(datetime.timedelta(hours=-5))
 
 
-def hora_boletin_bogota(ahora=None):
-    """Hora del boletín según la hora de Bogotá: antes de la 1 p.m.
-    -> "1:00 p.m."; a la 1 p.m. o después -> "6:00 p.m.". Si `ahora`
-    viene sin zona se asume Bogotá; con zona se convierte a Bogotá
-    (la app corre en un servidor en UTC, no en hora local)."""
+def hora_boletin_bogota(ahora=None, corte=13, antes="1:00 p.m.", despues="6:00 p.m."):
+    """Hora del boletín según la hora de Bogotá y el horario del perfil.
+
+    Antes de la hora `corte` -> `antes`; desde `corte` -> `despues`.
+    Secretaría (por defecto): corte 13, antes "1:00 p.m.", después
+    "6:00 p.m.". Defensoría: corte 16, antes "4:00 p.m." (boletín que
+    se arma en el día), después "8:00 a.m." (boletín que se arma tras
+    la descarga de las 4 p.m.). Si `ahora` viene sin zona se asume
+    Bogotá; con zona se convierte a Bogotá (la app corre en un
+    servidor en UTC, no en hora local). Corte inválido -> 13.
+    """
     zona = _zona_bogota()
     if ahora is None:
         ahora = datetime.datetime.now(zona)
@@ -314,7 +321,10 @@ def hora_boletin_bogota(ahora=None):
         ahora = ahora.replace(tzinfo=zona)
     else:
         ahora = ahora.astimezone(zona)
-    return "1:00 p.m." if ahora.hour < 13 else "6:00 p.m."
+    _corte = corte if (isinstance(corte, int) and not isinstance(corte, bool)
+                       and 0 <= corte <= 23) else 13
+    return (str(antes or "1:00 p.m.").strip() or "1:00 p.m.") if ahora.hour < _corte \
+        else (str(despues or "6:00 p.m.").strip() or "6:00 p.m.")
 
 class LimiteFilasError(ValueError):
     """El dossier supera MAX_FILAS_POR_DOSSIER filas leídas."""
@@ -791,6 +801,33 @@ def _url_link_ext(row) -> str:
     return ""
 
 
+_OPINION_URL_STEMS = ('opinion', 'columna', 'editorial')
+
+
+def aplicar_genero_por_url(rows) -> int:
+    """GÉNERO por la URL web (v1.13/v1.9, 2026-10-31): si la Web Ext de la
+    nota (URL Nota, solo Internet, el mismo valor que se exporta) trae
+    /opinion/, /columna(s)/ o /editorial/ y el grupo quedó como Noticia,
+    la fila pasa a Opinión. Solo sube Noticia a Opinión: nunca sobrescribe
+    una Entrevista, una Opinión ya asignada ni una duplicada ('-'). Es el
+    mismo criterio del rescate por Sección, pero con la evidencia de la
+    URL (una columna de opinión como la de elpilon.com.co/opinion/...
+    ya no queda como Noticia). Solo tiene efecto donde se clasifica
+    género (Secretaría); donde GÉNERO no se clasifica queda vacío y no
+    hace nada. Devuelve nº de filas cambiadas."""
+    cambios = 0
+    for row in rows:
+        if row.get('is_duplicate'):
+            continue
+        if (row.get('GÉNERO') or '') != 'Noticia':
+            continue
+        url = (_url_web_ext(row) or '').lower()
+        if any(s in url for s in _OPINION_URL_STEMS):
+            row['GÉNERO'] = 'Opinión'
+            cambios += 1
+    return cambios
+
+
 def _url_web_ext(row) -> str:
     """Enlace para la columna "Web Ext" (v4.58): solo Online/Internet
     (normalizado a "Internet") y tomado de la columna "URL Nota" (el enlace
@@ -1061,6 +1098,9 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
                                subtemas_fijos=None,
                                clasificar_tipo_genero=False,
                                formato_boletin=False,
+                               hora_boletin_corte=13,
+                               hora_boletin_antes="1:00 p.m.",
+                               hora_boletin_despues="6:00 p.m.",
                                excluir_analizados=True,
                                cubos_objetivo=16, votos=2, tam_lote=10,
                                workers=8, umbral_titulo=92, umbral_cuerpo=85):
@@ -1086,6 +1126,10 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
         "subtemas_fijos": list(subtemas_fijos or []),
         "clasificar_tipo_genero": bool(clasificar_tipo_genero),
         "formato_boletin": bool(formato_boletin),
+        "hora_boletin_corte": hora_boletin_corte if (isinstance(hora_boletin_corte, int)
+            and not isinstance(hora_boletin_corte, bool) and 0 <= hora_boletin_corte <= 23) else 13,
+        "hora_boletin_antes": (str(hora_boletin_antes or "1:00 p.m.").strip() or "1:00 p.m."),
+        "hora_boletin_despues": (str(hora_boletin_despues or "6:00 p.m.").strip() or "6:00 p.m."),
         "excluir_analizados": bool(excluir_analizados),
         "taxonomia": taxonomia if taxonomia is not None
                      else "Automática según el archivo (recomendada)",
@@ -1627,7 +1671,9 @@ def process_dossier(
     # Bogotá en que se corre; ambas se fijan aquí, cuando las filas ya
     # están finales y ordenadas, justo antes de exportar.
     if ai_extra.get("formato_boletin"):
-        _hora_b = hora_boletin_bogota()
+        _hora_b = hora_boletin_bogota(corte=ai_extra.get("hora_boletin_corte"),
+                                      antes=ai_extra.get("hora_boletin_antes"),
+                                      despues=ai_extra.get("hora_boletin_despues"))
         _fecha_k = KEY_MAP.get("fecha", "Fecha")
         for _r in rows:
             _r["FECHA INFORME"] = _r.get(_fecha_k)
@@ -1678,6 +1724,11 @@ def process_dossier(
     def export_progress(pct, msg):
         overall = 94 + int(pct * 0.06)
         emit_progress(progress, overall, msg)
+
+    # v1.13/v1.9 (2026-10-31): género por URL web (ver
+    # aplicar_genero_por_url). Corre antes de exportar para que el xlsx
+    # ya lleve la Opinión; no afecta a filas sin género clasificado.
+    aplicar_genero_por_url(rows)
 
     output_data = generate_output_excel(rows, KEY_MAP, progress=export_progress, columns_to_use=cols_to_export)
     _conteo_tonos = _contar_tonos(rows)
