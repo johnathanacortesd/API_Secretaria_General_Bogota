@@ -1163,16 +1163,63 @@ _SUSTANTIVO_HECHO = {
 }
 
 
+# Meses y días de semana (sin tildes: nz() las quita) + rangos de fecha,
+# para la forma (c) de _es_subtema_sin_hecho: solo lugar + fecha.
+_MESES_ANIO = {
+    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
+    'agosto', 'septiembre', 'setiembre', 'octubre', 'noviembre', 'diciembre',
+}
+_DIAS_SEMANA = {
+    'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo',
+}
+_RE_RANGO_FECHA = re.compile(r'\b\d+\s*(al|a|/|-)\s*\d+\b|\b\d{1,2}\s+de\b')
+
+
+def _es_solo_lugar_fecha(s: str, contenido) -> bool:
+    """True si el subtema es solo lugar + fecha, sin hecho.
+
+    «Bogotá del 3 al 7 de noviembre» nombra cuándo y dónde, pero no QUÉ:
+    quitando funcionales, dígitos y meses/días, no queda ningún
+    sustantivo en minúscula, solo nombres de lugar en mayúscula (o nada,
+    si es fecha pura). Los dígitos rompían la regla de lista de nombres
+    y el mes no se trataba como fecha, así que se colaba como válido.
+    No toca etiquetas con hecho («Jornada de vacunación del 3 al 7 de
+    noviembre», «Entrega de residuos 3 de noviembre») ni nombres sin
+    fecha («Universidad de Atalaya») ni cifras sin fecha («Ruta 66»).
+    """
+    toks_fecha = set(words(s))
+    tiene_fecha = (bool(toks_fecha & _MESES_ANIO)
+                   or bool(toks_fecha & _DIAS_SEMANA)
+                   or bool(_RE_RANGO_FECHA.search(nz(s))))
+    if not tiene_fecha:
+        return False
+    if any(w in _EVENTO_NOMBRE for w in contenido):
+        return False
+    if any(w in _SUSTANTIVO_HECHO for w in contenido):
+        return False
+    resto = [w for w in re.findall(
+        r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+", s)
+        if nz(w) not in CONECT and not w.isdigit()
+        and nz(w) not in _MESES_ANIO and nz(w) not in _DIAS_SEMANA]
+    if not resto:
+        return True
+    return all((w[0].isupper()
+                and (len(w) == 1 or w[1:].islower() or w.isupper()))
+               for w in resto)
+
+
 def _es_subtema_sin_hecho(sub_tema: str) -> bool:
     """True si el subtema no nombra ningún hecho concreto.
 
-    Dos formas, ambas sin sustantivo del hecho:
+    Tres formas, todas sin sustantivo del hecho:
     a) Solo palabras funcionales de llamado («Conozca cuándo será»,
        «Así puede participar», «Qué llevar»).
     b) Solo nombres propios («Comfenalco Valle en Restrepo, Buenaventura
        y Cali»): una lista de nombres sin el hecho (jornadas de empleo).
        Los nombres de evento quedan fuera: si hay un sustantivo de evento
        («Premio Mujer Cafam», «Feria Laboral») sí hay hecho.
+    c) Solo lugar + fecha («Bogotá del 3 al 7 de noviembre»): cuándo y
+       dónde, sin QUÉ. Los dígitos y el mes no deben romper la regla.
     Una frase con un sustantivo común («Convocatoria laboral en Restrepo»,
     «Estado de salud de Yamid Amat», «Conexión entre educación media y
     superior») NO se marca: la regla no persigue recortes con hecho, solo
@@ -1201,6 +1248,13 @@ def _es_subtema_sin_hecho(sub_tema: str) -> bool:
             and contenido[0] not in _SUSTANTIVO_HECHO and all(
             (w[0].isupper() and (len(w) == 1 or w[1:].islower() or w.isupper()))
             for w in originales)):
+        return True
+    # Sec v1.23 / Def v1.20 (caso real Secretaría 2026-11-01): solo lugar
+    # + fecha no es subtema («Bogotá del 3 al 7 de noviembre»): dice
+    # cuándo y dónde pero no QUÉ. Los dígitos rompían la regla de lista
+    # de nombres y el mes no se trataba como fecha, así que se colaba
+    # como válido y llegaba al xlsx final.
+    if _es_solo_lugar_fecha(s, contenido):
         return True
     return False
 
@@ -3044,7 +3098,11 @@ def _subtema_especifico(titulo: str, textos=()) -> str:
     """
     t = str(titulo or '')
     cand = _subtema_desde_titulo(t)
-    if cand:
+    # Sec v1.23 / Def v1.20: un rótulo sin hecho (p. ej. solo lugar +
+    # fecha) no es un específico válido ni desde el titular: si se
+    # devolviera aquí, la puerta final lo volvería a marcar y el
+    # fallback caería en bucle sobre el mismo rótulo.
+    if cand and not _es_subtema_sin_hecho(cand):
         return cand
     for texto in (textos or []):
         for oracion in re.split(r'(?<=[.!?…])\s+', sq(texto or '')):
@@ -3052,7 +3110,8 @@ def _subtema_especifico(titulo: str, textos=()) -> str:
             if not oracion:
                 continue
             cand = _subtema_desde_titulo(oracion)
-            if cand and not _subtema_copia_titular(cand, t):
+            if cand and not _subtema_copia_titular(cand, t) \
+                    and not _es_subtema_sin_hecho(cand):
                 return cand
     pals = _palabras_distintivas(list(textos or []) + [t])
     if not pals:

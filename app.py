@@ -20,7 +20,7 @@ from pkl_classifier import PklClassifierError, load_sklearn_estimator
 from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.22"
+APP_VERSION = "v1.23"
 
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
