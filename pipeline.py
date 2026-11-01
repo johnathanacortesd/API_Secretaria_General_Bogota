@@ -1268,7 +1268,11 @@ def normalize_dossier_dataframe(df, region_map, internet_map, progress: Progress
     df["Duración - Nro. Caracteres"] = df.get("Duración - Nro. Caracteres", pd.Series(dtype=str))
 
     df.loc[is_av, "Dimensión"] = df.loc[is_av, "Duración - Nro. Caracteres"]
-    df.loc[is_av, "Duración - Nro. Caracteres"] = 0
+    # Sec v1.24 / Def v1.21 (orden del usuario): para aire, cable, AM, FM,
+    # Televisión y Radio (todos caen en TIPOS_AV vía TIPO_MEDIO_MAP), el
+    # valor de Duración - Nro. Caracteres TAMBIÉN queda en su propia
+    # columna. Antes se ponía en 0 y solo vivía en Dimensión. Dimensión
+    # sigue recibiendo el mismo valor, como antes; no se quita nada.
 
     cpe_input = get_column_robust(df, "CPE")
     valor_nota_input = get_column_robust(df, "Valor de Nota")
