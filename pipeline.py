@@ -303,16 +303,20 @@ def _zona_bogota():
         return datetime.timezone(datetime.timedelta(hours=-5))
 
 
-def hora_boletin_bogota(ahora=None, corte=13, antes="1:00 p.m.", despues="6:00 p.m."):
+def hora_boletin_bogota(ahora=None, corte_manana=13, corte_tarde=18,
+                        manana="1:00 p.m.", tarde="6:00 p.m."):
     """Hora del boletín según la hora de Bogotá y el horario del perfil.
 
-    Antes de la hora `corte` -> `antes`; desde `corte` -> `despues`.
-    Secretaría (por defecto): corte 13, antes "1:00 p.m.", después
-    "6:00 p.m.". Defensoría: corte 16, antes "4:00 p.m." (boletín que
-    se arma en el día), después "8:00 a.m." (boletín que se arma tras
-    la descarga de las 4 p.m.). Si `ahora` viene sin zona se asume
+    Dos boletines al día: el de la mañana (`manana`) y el de la tarde
+    (`tarde`). La etiqueta es la del PRÓXIMO boletín: desde
+    `corte_manana` y antes de `corte_tarde` -> `tarde`; resto del día
+    (madrugada y después de `corte_tarde`) -> `manana`. Límites
+    inclusivos en los cortes, igual que antes.
+    Secretaría (por defecto): mañana "1:00 p.m." (corte 13), tarde
+    "6:00 p.m." (corte 18). Defensoría: mañana "8:00 a.m." (corte 8),
+    tarde "4:00 p.m." (corte 16). Si `ahora` viene sin zona se asume
     Bogotá; con zona se convierte a Bogotá (la app corre en un
-    servidor en UTC, no en hora local). Corte inválido -> 13.
+    servidor en UTC, no en hora local). Corte inválido -> su defecto.
     """
     zona = _zona_bogota()
     if ahora is None:
@@ -321,10 +325,13 @@ def hora_boletin_bogota(ahora=None, corte=13, antes="1:00 p.m.", despues="6:00 p
         ahora = ahora.replace(tzinfo=zona)
     else:
         ahora = ahora.astimezone(zona)
-    _corte = corte if (isinstance(corte, int) and not isinstance(corte, bool)
-                       and 0 <= corte <= 23) else 13
-    return (str(antes or "1:00 p.m.").strip() or "1:00 p.m.") if ahora.hour < _corte \
-        else (str(despues or "6:00 p.m.").strip() or "6:00 p.m.")
+    _cm = corte_manana if (isinstance(corte_manana, int) and not isinstance(corte_manana, bool)
+                           and 0 <= corte_manana <= 23) else 13
+    _ct = corte_tarde if (isinstance(corte_tarde, int) and not isinstance(corte_tarde, bool)
+                         and 0 <= corte_tarde <= 23) else 18
+    _man = (str(manana or "1:00 p.m.").strip() or "1:00 p.m.")
+    _tar = (str(tarde or "6:00 p.m.").strip() or "6:00 p.m.")
+    return _tar if (_cm <= ahora.hour < _ct) else _man
 
 class LimiteFilasError(ValueError):
     """El dossier supera MAX_FILAS_POR_DOSSIER filas leídas."""
@@ -1098,9 +1105,10 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
                                subtemas_fijos=None,
                                clasificar_tipo_genero=False,
                                formato_boletin=False,
-                               hora_boletin_corte=13,
-                               hora_boletin_antes="1:00 p.m.",
-                               hora_boletin_despues="6:00 p.m.",
+                               hora_boletin_corte_manana=13,
+                               hora_boletin_corte_tarde=18,
+                               hora_boletin_manana="1:00 p.m.",
+                               hora_boletin_tarde="6:00 p.m.",
                                excluir_analizados=True,
                                cubos_objetivo=16, votos=2, tam_lote=10,
                                workers=8, umbral_titulo=92, umbral_cuerpo=85):
@@ -1126,10 +1134,12 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
         "subtemas_fijos": list(subtemas_fijos or []),
         "clasificar_tipo_genero": bool(clasificar_tipo_genero),
         "formato_boletin": bool(formato_boletin),
-        "hora_boletin_corte": hora_boletin_corte if (isinstance(hora_boletin_corte, int)
-            and not isinstance(hora_boletin_corte, bool) and 0 <= hora_boletin_corte <= 23) else 13,
-        "hora_boletin_antes": (str(hora_boletin_antes or "1:00 p.m.").strip() or "1:00 p.m."),
-        "hora_boletin_despues": (str(hora_boletin_despues or "6:00 p.m.").strip() or "6:00 p.m."),
+        "hora_boletin_corte_manana": hora_boletin_corte_manana if (isinstance(hora_boletin_corte_manana, int)
+            and not isinstance(hora_boletin_corte_manana, bool) and 0 <= hora_boletin_corte_manana <= 23) else 13,
+        "hora_boletin_corte_tarde": hora_boletin_corte_tarde if (isinstance(hora_boletin_corte_tarde, int)
+            and not isinstance(hora_boletin_corte_tarde, bool) and 0 <= hora_boletin_corte_tarde <= 23) else 18,
+        "hora_boletin_manana": (str(hora_boletin_manana or "1:00 p.m.").strip() or "1:00 p.m."),
+        "hora_boletin_tarde": (str(hora_boletin_tarde or "6:00 p.m.").strip() or "6:00 p.m."),
         "excluir_analizados": bool(excluir_analizados),
         "taxonomia": taxonomia if taxonomia is not None
                      else "Automática según el archivo (recomendada)",
@@ -1327,7 +1337,7 @@ def generate_output_excel(rows, km, progress: ProgressCb = None, columns_to_use:
     fmt_header = wb.add_format({"bold": True})
     fmt_link = wb.add_format({"font_color": "#0563C1", "underline": 1, "align": "left"})
     fmt_plain_hlink = wb.add_format({"font_color": "#000000", "underline": False, "align": "left"})
-    fmt_date = wb.add_format({"num_format": "DD/MM/YYYY"})
+    fmt_date = wb.add_format({"num_format": "dd/mm/yyyy", "align": "center"})
     fmt_currency = wb.add_format({"num_format": "$#,##0"})
     fmt_thousands = wb.add_format({"num_format": "#,##0"})
     # Formato entero plano sin puntos de miles ni decimales para IDs
@@ -1383,6 +1393,8 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
             # propósito: write() convertiría la URL en hipervínculo
             # automáticamente. No toca Link Nota, Link Ext, Web Ext ni
             # Audio, que siguen como hipervínculos.
+            # v1.18/v1.14: además con formato explícito negro sin
+            # subrayado, para que ningún visor lo pinte como enlace.
             if isinstance(h, str) and h.strip().lower() == "enlace":
                 _v = row.get(h)
                 if isinstance(_v, dict):
@@ -1392,7 +1404,7 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
                 if _t is None or str(_t).strip() in ("", "nan", "None", "-"):
                     ws.write_blank(excel_row, cidx, None)
                 else:
-                    ws.write_string(excel_row, cidx, str(_t))
+                    ws.write_string(excel_row, cidx, str(_t), fmt_plain_hlink)
                 continue
             # v4.57: "Link Ext" y "Web Ext" con el enlace completo a la
             # noticia, mostrado completo y clicable (como "Audio").
@@ -1691,14 +1703,17 @@ def process_dossier(
     # el horario del perfil y la hora de Bogotá en que se corre; ambas
     # se fijan aquí, cuando las filas ya están finales y ordenadas,
     # justo antes de exportar.
+    # Fecha de procesamiento (Bogotá) única para toda la corrida: la usa
+    # el boletín y la corrección incondicional de FECHA INFORME abajo.
+    _ahora_bogota = datetime.datetime.now(_zona_bogota())
+    _fecha_informe = _ahora_bogota.replace(tzinfo=None, hour=0, minute=0,
+                                           second=0, microsecond=0)
     if ai_extra.get("formato_boletin"):
-        _ahora_bogota = datetime.datetime.now(_zona_bogota())
         _hora_b = hora_boletin_bogota(ahora=_ahora_bogota,
-                                      corte=ai_extra.get("hora_boletin_corte"),
-                                      antes=ai_extra.get("hora_boletin_antes"),
-                                      despues=ai_extra.get("hora_boletin_despues"))
-        _fecha_informe = _ahora_bogota.replace(tzinfo=None, hour=0, minute=0,
-                                               second=0, microsecond=0)
+                                      corte_manana=ai_extra.get("hora_boletin_corte_manana"),
+                                      corte_tarde=ai_extra.get("hora_boletin_corte_tarde"),
+                                      manana=ai_extra.get("hora_boletin_manana"),
+                                      tarde=ai_extra.get("hora_boletin_tarde"))
         for _r in rows:
             _r["FECHA INFORME"] = _fecha_informe
             _r["HORA B"] = _hora_b
@@ -1753,6 +1768,15 @@ def process_dossier(
     # aplicar_genero_por_url). Corre antes de exportar para que el xlsx
     # ya lleve la Opinión; no afecta a filas sin género clasificado.
     aplicar_genero_por_url(rows)
+
+    # v1.18/v1.14: FECHA INFORME siempre es la fecha de procesamiento
+    # (Bogotá), en cualquier camino que la exporte — no solo en formato
+    # boletín. Sin esto, una corrida personalizada sobre un xlsx ya
+    # procesado arrastraba la FECHA INFORME vieja (en v1.13 se vio con
+    # valores de la columna FECHA, de antes de v1.12).
+    if "FECHA INFORME" in cols_to_export:
+        for _r in rows:
+            _r["FECHA INFORME"] = _fecha_informe
 
     output_data = generate_output_excel(rows, KEY_MAP, progress=export_progress, columns_to_use=cols_to_export)
     _conteo_tonos = _contar_tonos(rows)

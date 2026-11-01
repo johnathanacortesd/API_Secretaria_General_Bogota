@@ -20,7 +20,7 @@ from pkl_classifier import PklClassifierError, load_sklearn_estimator
 from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.17"
+APP_VERSION = "v1.18"
 
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
@@ -563,10 +563,12 @@ def main():
                             st.session_state["_perfil_subtemas_fijos"] = _perfil_actual.get("subtemas_fijos") or []
                             st.session_state["_perfil_clasificar_tipo_genero"] = bool(_perfil_actual.get("clasificar_tipo_genero"))
                             st.session_state["_perfil_formato_boletin"] = bool(_perfil_actual.get("formato_boletin"))
-                            _corte_p = _perfil_actual.get("hora_boletin_corte")
-                            st.session_state["_perfil_hora_boletin_corte"] = _corte_p if (isinstance(_corte_p, int) and not isinstance(_corte_p, bool)) else 13
-                            st.session_state["_perfil_hora_boletin_antes"] = _perfil_actual.get("hora_boletin_antes") or "1:00 p.m."
-                            st.session_state["_perfil_hora_boletin_despues"] = _perfil_actual.get("hora_boletin_despues") or "6:00 p.m."
+                            _cm_p = _perfil_actual.get("hora_boletin_corte_manana")
+                            _ct_p = _perfil_actual.get("hora_boletin_corte_tarde")
+                            st.session_state["_perfil_hora_boletin_corte_manana"] = _cm_p if (isinstance(_cm_p, int) and not isinstance(_cm_p, bool)) else 13
+                            st.session_state["_perfil_hora_boletin_corte_tarde"] = _ct_p if (isinstance(_ct_p, int) and not isinstance(_ct_p, bool)) else 18
+                            st.session_state["_perfil_hora_boletin_manana"] = _perfil_actual.get("hora_boletin_manana") or "1:00 p.m."
+                            st.session_state["_perfil_hora_boletin_tarde"] = _perfil_actual.get("hora_boletin_tarde") or "6:00 p.m."
                             st.session_state["_perfil_aplicado"] = sel_perfil
                             st.rerun()
                         st.caption("📋 " + perfil_a_resumen(_perfil_actual))
@@ -577,9 +579,10 @@ def main():
                     st.session_state["_perfil_subtemas_fijos"] = []
                     st.session_state["_perfil_clasificar_tipo_genero"] = False
                     st.session_state["_perfil_formato_boletin"] = False
-                    st.session_state["_perfil_hora_boletin_corte"] = 13
-                    st.session_state["_perfil_hora_boletin_antes"] = "1:00 p.m."
-                    st.session_state["_perfil_hora_boletin_despues"] = "6:00 p.m."
+                    st.session_state["_perfil_hora_boletin_corte_manana"] = 13
+                    st.session_state["_perfil_hora_boletin_corte_tarde"] = 18
+                    st.session_state["_perfil_hora_boletin_manana"] = "1:00 p.m."
+                    st.session_state["_perfil_hora_boletin_tarde"] = "6:00 p.m."
 
                 with st.form("main_form"):
                     st.markdown('<div class="sec-label">1. Sube el archivo de entrada</div>', unsafe_allow_html=True)
@@ -841,9 +844,10 @@ def main():
                                         "subtemas_fijos": st.session_state.get("_perfil_subtemas_fijos") or [],
                                         "clasificar_tipo_genero": bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
                                         "formato_boletin": bool(st.session_state.get("_perfil_formato_boletin")),
-                                        "hora_boletin_corte": st.session_state.get("_perfil_hora_boletin_corte", 13),
-                                        "hora_boletin_antes": st.session_state.get("_perfil_hora_boletin_antes") or "1:00 p.m.",
-                                        "hora_boletin_despues": st.session_state.get("_perfil_hora_boletin_despues") or "6:00 p.m.",
+                                        "hora_boletin_corte_manana": st.session_state.get("_perfil_hora_boletin_corte_manana", 13),
+                                        "hora_boletin_corte_tarde": st.session_state.get("_perfil_hora_boletin_corte_tarde", 18),
+                                        "hora_boletin_manana": st.session_state.get("_perfil_hora_boletin_manana") or "1:00 p.m.",
+                                        "hora_boletin_tarde": st.session_state.get("_perfil_hora_boletin_tarde") or "6:00 p.m.",
                                         "taxonomia": tax_cargada,
                                         "notas": "",
                                     })
@@ -877,9 +881,10 @@ def main():
                                     "subtemas_fijos": st.session_state.get("_perfil_subtemas_fijos") or [],
                                     "clasificar_tipo_genero": bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
                                     "formato_boletin": bool(st.session_state.get("_perfil_formato_boletin")),
-                                    "hora_boletin_corte": st.session_state.get("_perfil_hora_boletin_corte", 13),
-                                    "hora_boletin_antes": st.session_state.get("_perfil_hora_boletin_antes") or "1:00 p.m.",
-                                    "hora_boletin_despues": st.session_state.get("_perfil_hora_boletin_despues") or "6:00 p.m.",
+                                    "hora_boletin_corte_manana": st.session_state.get("_perfil_hora_boletin_corte_manana", 13),
+                                    "hora_boletin_corte_tarde": st.session_state.get("_perfil_hora_boletin_corte_tarde", 18),
+                                    "hora_boletin_manana": st.session_state.get("_perfil_hora_boletin_manana") or "1:00 p.m.",
+                                    "hora_boletin_tarde": st.session_state.get("_perfil_hora_boletin_tarde") or "6:00 p.m.",
                                     "taxonomia": tax_eff,
                                     "cubos_objetivo": int(cubos_objetivo_input),
                                     "votos": int(votos_input),
@@ -1135,9 +1140,10 @@ def main():
                             subtemas_fijos=st.session_state.get("_perfil_subtemas_fijos") or [],
                             clasificar_tipo_genero=bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
                             formato_boletin=bool(st.session_state.get("_perfil_formato_boletin")),
-                            hora_boletin_corte=st.session_state.get("_perfil_hora_boletin_corte", 13),
-                            hora_boletin_antes=st.session_state.get("_perfil_hora_boletin_antes") or "1:00 p.m.",
-                            hora_boletin_despues=st.session_state.get("_perfil_hora_boletin_despues") or "6:00 p.m.",
+                            hora_boletin_corte_manana=st.session_state.get("_perfil_hora_boletin_corte_manana", 13),
+                            hora_boletin_corte_tarde=st.session_state.get("_perfil_hora_boletin_corte_tarde", 18),
+                            hora_boletin_manana=st.session_state.get("_perfil_hora_boletin_manana") or "1:00 p.m.",
+                            hora_boletin_tarde=st.session_state.get("_perfil_hora_boletin_tarde") or "6:00 p.m.",
                             taxonomia=tax_eff_c,
                             cubos_objetivo=int(cubos_objetivo_c),
                             votos=int(votos_c),

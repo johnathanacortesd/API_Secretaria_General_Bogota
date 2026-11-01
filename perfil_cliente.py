@@ -61,9 +61,10 @@ def _defaults() -> dict:
         "subtemas_fijos": [],
         "clasificar_tipo_genero": False,
         "formato_boletin": False,
-        "hora_boletin_corte": 13,
-        "hora_boletin_antes": "1:00 p.m.",
-        "hora_boletin_despues": "6:00 p.m.",
+        "hora_boletin_corte_manana": 13,
+        "hora_boletin_corte_tarde": 18,
+        "hora_boletin_manana": "1:00 p.m.",
+        "hora_boletin_tarde": "6:00 p.m.",
         "notas": "",
     }
 
@@ -92,11 +93,17 @@ def validar_perfil(data: dict) -> list:
         errores.append("'clasificar_tipo_genero' debe ser true/false")
     if not isinstance(d["formato_boletin"], bool):
         errores.append("'formato_boletin' debe ser true/false")
-    _corte = d["hora_boletin_corte"]
-    if isinstance(_corte, bool) or not isinstance(_corte, int) or not (0 <= _corte <= 23):
-        errores.append("'hora_boletin_corte' debe ser una hora entera 0-23")
-    if not isinstance(d["hora_boletin_antes"], str) or not isinstance(d["hora_boletin_despues"], str):
-        errores.append("'hora_boletin_antes' y 'hora_boletin_despues' deben ser textos como '4:00 p.m.'")
+    _cm, _ct = d["hora_boletin_corte_manana"], d["hora_boletin_corte_tarde"]
+    _cm_ok = isinstance(_cm, int) and not isinstance(_cm, bool) and 0 <= _cm <= 23
+    _ct_ok = isinstance(_ct, int) and not isinstance(_ct, bool) and 0 <= _ct <= 23
+    if not _cm_ok:
+        errores.append("'hora_boletin_corte_manana' debe ser una hora entera 0-23")
+    if not _ct_ok:
+        errores.append("'hora_boletin_corte_tarde' debe ser una hora entera 0-23")
+    if _cm_ok and _ct_ok and _cm >= _ct:
+        errores.append("'hora_boletin_corte_manana' debe ser menor que 'hora_boletin_corte_tarde'")
+    if not isinstance(d["hora_boletin_manana"], str) or not isinstance(d["hora_boletin_tarde"], str):
+        errores.append("'hora_boletin_manana' y 'hora_boletin_tarde' deben ser textos como '4:00 p.m.'")
     tax = d["taxonomia"]
     if tax is not None:
         if not isinstance(tax, dict) or not isinstance(tax.get("temas"), list) \
@@ -126,13 +133,29 @@ def normalizar_perfil(data: dict) -> dict:
     ]
     d["clasificar_tipo_genero"] = bool(d["clasificar_tipo_genero"])
     d["formato_boletin"] = bool(d["formato_boletin"])
-    _corte = d["hora_boletin_corte"]
-    d["hora_boletin_corte"] = _corte if (isinstance(_corte, int)
-        and not isinstance(_corte, bool) and 0 <= _corte <= 23) else 13
-    d["hora_boletin_antes"] = (str(d["hora_boletin_antes"] or "1:00 p.m.").strip()
-                               or "1:00 p.m.")
-    d["hora_boletin_despues"] = (str(d["hora_boletin_despues"] or "6:00 p.m.").strip()
-                                 or "6:00 p.m.")
+    # v1.18/v1.14: compatibilidad con perfiles guardados con el modelo
+    # viejo de un solo corte (hora_boletin_corte/antes/despues): si el
+    # perfil no trae los campos nuevos, se mapean (corte_tarde=corte,
+    # tarde=antes, manana=despues, corte_manana=0 reproduce el modelo
+    # viejo exacto). Los JSON del repo ya traen los campos nuevos.
+    _crudo = data or {}
+    if "hora_boletin_corte_manana" not in _crudo and "hora_boletin_corte" in _crudo:
+        d["hora_boletin_corte_tarde"] = _crudo.get("hora_boletin_corte")
+        d["hora_boletin_corte_manana"] = 0
+    if "hora_boletin_tarde" not in _crudo and "hora_boletin_antes" in _crudo:
+        d["hora_boletin_tarde"] = _crudo.get("hora_boletin_antes")
+    if "hora_boletin_manana" not in _crudo and "hora_boletin_despues" in _crudo:
+        d["hora_boletin_manana"] = _crudo.get("hora_boletin_despues")
+    _cm = d["hora_boletin_corte_manana"]
+    d["hora_boletin_corte_manana"] = _cm if (isinstance(_cm, int)
+        and not isinstance(_cm, bool) and 0 <= _cm <= 23) else 13
+    _ct = d["hora_boletin_corte_tarde"]
+    d["hora_boletin_corte_tarde"] = _ct if (isinstance(_ct, int)
+        and not isinstance(_ct, bool) and 0 <= _ct <= 23) else 18
+    d["hora_boletin_manana"] = (str(d["hora_boletin_manana"] or "1:00 p.m.").strip()
+                                or "1:00 p.m.")
+    d["hora_boletin_tarde"] = (str(d["hora_boletin_tarde"] or "6:00 p.m.").strip()
+                               or "6:00 p.m.")
     d["notas"] = str(d["notas"] or "")
     if d["taxonomia"]:
         d["taxonomia"] = {
