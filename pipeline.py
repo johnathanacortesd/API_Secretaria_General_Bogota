@@ -21,7 +21,7 @@ from openpyxl import load_workbook
 from openpyxl.utils.cell import column_index_from_string, coordinate_from_string, range_boundaries
 from unidecode import unidecode
 
-from analyzer_tono_tema import enrich_rows_with_ai, ultimo_resumen, aplicar_prominencia
+from analyzer_tono_tema import enrich_rows_with_ai, ultimo_resumen, aplicar_prominencia, _quitar_nombre_la_opinion
 from pkl_classifier import (
     apply_pkl_classifiers,
     fill_classification_context,
@@ -828,9 +828,34 @@ def aplicar_genero_por_url(rows) -> int:
             continue
         if (row.get('GÉNERO') or '') != 'Noticia':
             continue
-        url = (_url_web_ext(row) or '').lower()
+        # v1.19: el nombre del diario La Opinión no cuenta como Opinión
+        # (su dominio contiene "opinion" pero no es una columna de opinión).
+        url = _quitar_nombre_la_opinion((_url_web_ext(row) or '').lower())
         if any(s in url for s in _OPINION_URL_STEMS):
             row['GÉNERO'] = 'Opinión'
+            cambios += 1
+    return cambios
+
+
+def aplicar_genero_por_frase_entrevista(rows) -> int:
+    """GÉNERO por la frase "En entrevista con" (v1.19, orden del usuario):
+    si la noticia dice "En entrevista con" (en el título o en el cuerpo)
+    y quedó como Noticia, pasa a Entrevista. Solo sube Noticia a
+    Entrevista: nunca sobrescribe una Opinión, una Entrevista ya
+    asignada ni una duplicada, y donde GÉNERO no se clasifica (vacío)
+    no hace nada, igual que el rescate por URL. Devuelve nº de filas
+    cambiadas."""
+    cambios = 0
+    for row in rows:
+        if row.get('is_duplicate'):
+            continue
+        if (row.get('GÉNERO') or '') != 'Noticia':
+            continue
+        texto = ' '.join(str(row.get(k) or '') for k in
+                         ('Título', 'CuerpoEs', 'Resumen - Aclaracion'))
+        texto = re.sub(r'\s+', ' ', texto).lower()
+        if 'en entrevista con' in texto:
+            row['GÉNERO'] = 'Entrevista'
             cambios += 1
     return cambios
 
@@ -1384,6 +1409,22 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
         if "CuerpoEs" in row and isinstance(row.get("CuerpoEs"), str) and row["CuerpoEs"].strip():
             row["CuerpoEs"] = corregir_texto(row["CuerpoEs"])
 
+        # v1.19/v1.15: decodificar entidades HTML en Contexto analizado y en
+        # Resumen - Aclaracion, además de la limpieza que ya reciben
+        # Título, Resumen y CuerpoEs. Solo se decodifica: no se cambia
+        # ninguna palabra, no se recorta nada y no se usa API. Sin esto,
+        # un cuerpo con entidades ("podr&#xE1;") las arrastraba a
+        # Contexto (que se construye del CuerpoEs crudo, no del resumen
+        # limpio) y, desde ahí, a texto, que se deriva de Contexto.
+        # Va antes de la derivación de texto para que texto también salga
+        # limpio.
+        if isinstance(row.get(CONTEXTO_ANALIZADO_COL), str):
+            row[CONTEXTO_ANALIZADO_COL] = decode_html_entities(
+                row[CONTEXTO_ANALIZADO_COL])
+        if isinstance(row.get("Resumen - Aclaracion"), str):
+            row["Resumen - Aclaracion"] = decode_html_entities(
+                row["Resumen - Aclaracion"])
+
         excel_row = i + 1
         for cidx, h in enumerate(cols):
             # v1.17/v1.13: columna "ENLACE" como TEXTO PLANO (por pedido
@@ -1768,6 +1809,11 @@ def process_dossier(
     # aplicar_genero_por_url). Corre antes de exportar para que el xlsx
     # ya lleve la Opinión; no afecta a filas sin género clasificado.
     aplicar_genero_por_url(rows)
+
+    # v1.19 (orden del usuario): si la noticia dice "En entrevista con",
+    # pasa a Entrevista. Corre después del rescate por URL y con la misma
+    # guarda (solo sube Noticia); lo demás no cambia.
+    aplicar_genero_por_frase_entrevista(rows)
 
     # v1.18/v1.14: FECHA INFORME siempre es la fecha de procesamiento
     # (Bogotá), en cualquier camino que la exporte — no solo en formato

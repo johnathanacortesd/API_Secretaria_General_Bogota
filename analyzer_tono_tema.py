@@ -1800,11 +1800,29 @@ def aplicar_guardia_genero(grupos, etiquetas):
     return cambios
 
 
+def _quitar_nombre_la_opinion(s: str) -> str:
+    """Quita el nombre del diario La Opinión de un texto ya normalizado.
+
+    El nombre contiene "opinion" pero NO es evidencia del género Opinión:
+    una nota de laopinion.com o con Sección "La Opinión" no es columna de
+    opinión por eso (v1.19, orden del usuario; lo demás se mantiene).
+    Se quitan las formas con/sin espacio, con/sin .com y "desopinion",
+    que también contiene "opinion" como subcadena. Una sección /opinion/
+    genuina o una columna real siguen contando: solo se quita el nombre.
+    """
+    t = s
+    for tok in ('laopinion.com', 'desopinion.com', 'la opinion',
+                'laopinion', 'desopinion'):
+        t = t.replace(tok, '')
+    return t
+
+
 def aplicar_genero_por_seccion(rows, mapa, etiquetas, km):
     """Rescate de columnas de opinión por la Sección del dossier: si alguna
     fila del grupo trae Sección - Programa con opinión o columna y el grupo
     está como Noticia, pasa a Opinión. Solo rescata omisiones: nunca
-    sobrescribe una Entrevista ni una Opinión ya asignadas. Devuelve nº
+    sobrescribe una Entrevista ni una Opinión ya asignadas. El nombre del
+    diario La Opinión no cuenta como Opinión (v1.19). Devuelve nº
     de grupos cambiados."""
     sec_col = km.get("seccion_programa", "Sección - Programa") if isinstance(km, dict) else "Sección - Programa"
     filas_por_grupo = defaultdict(list)
@@ -1819,7 +1837,7 @@ def aplicar_genero_por_seccion(rows, mapa, etiquetas, km):
         for i in idxs:
             if i >= len(rows):
                 continue
-            sec = nz(str(rows[i].get(sec_col) or rows[i].get("Sección - Programa") or ""))
+            sec = _quitar_nombre_la_opinion(nz(str(rows[i].get(sec_col) or rows[i].get("Sección - Programa") or "")))
             if "opinion" in sec or "columna" in sec:
                 e["genero"] = "Opinión"
                 cambios += 1
