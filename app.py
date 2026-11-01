@@ -20,7 +20,7 @@ from pkl_classifier import PklClassifierError, load_sklearn_estimator
 from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.19"
+APP_VERSION = "v1.20"
 
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
@@ -562,6 +562,7 @@ def main():
                             st.session_state["_perfil_guia_subtema"] = _perfil_actual.get("guia_subtema") or ""
                             st.session_state["_perfil_subtemas_fijos"] = _perfil_actual.get("subtemas_fijos") or []
                             st.session_state["_perfil_clasificar_tipo_genero"] = bool(_perfil_actual.get("clasificar_tipo_genero"))
+                            st.session_state["_perfil_tono_distrito_positivo"] = bool(_perfil_actual.get("tono_distrito_positivo"))
                             st.session_state["_perfil_formato_boletin"] = bool(_perfil_actual.get("formato_boletin"))
                             _cm_p = _perfil_actual.get("hora_boletin_corte_manana")
                             _ct_p = _perfil_actual.get("hora_boletin_corte_tarde")
@@ -578,6 +579,7 @@ def main():
                     st.session_state["_perfil_guia_subtema"] = ""
                     st.session_state["_perfil_subtemas_fijos"] = []
                     st.session_state["_perfil_clasificar_tipo_genero"] = False
+                    st.session_state["_perfil_tono_distrito_positivo"] = False
                     st.session_state["_perfil_formato_boletin"] = False
                     st.session_state["_perfil_hora_boletin_corte_manana"] = 13
                     st.session_state["_perfil_hora_boletin_corte_tarde"] = 18
@@ -843,6 +845,7 @@ def main():
                                         "guia_subtema": st.session_state.get("_perfil_guia_subtema") or "",
                                         "subtemas_fijos": st.session_state.get("_perfil_subtemas_fijos") or [],
                                         "clasificar_tipo_genero": bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
+                                        "tono_distrito_positivo": bool(st.session_state.get("_perfil_tono_distrito_positivo")),
                                         "formato_boletin": bool(st.session_state.get("_perfil_formato_boletin")),
                                         "hora_boletin_corte_manana": st.session_state.get("_perfil_hora_boletin_corte_manana", 13),
                                         "hora_boletin_corte_tarde": st.session_state.get("_perfil_hora_boletin_corte_tarde", 18),
@@ -880,6 +883,7 @@ def main():
                                     "guia_subtema": st.session_state.get("_perfil_guia_subtema") or "",
                                     "subtemas_fijos": st.session_state.get("_perfil_subtemas_fijos") or [],
                                     "clasificar_tipo_genero": bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
+                                    "tono_distrito_positivo": bool(st.session_state.get("_perfil_tono_distrito_positivo")),
                                     "formato_boletin": bool(st.session_state.get("_perfil_formato_boletin")),
                                     "hora_boletin_corte_manana": st.session_state.get("_perfil_hora_boletin_corte_manana", 13),
                                     "hora_boletin_corte_tarde": st.session_state.get("_perfil_hora_boletin_corte_tarde", 18),
@@ -1139,6 +1143,7 @@ def main():
                             guia_subtema=st.session_state.get("_perfil_guia_subtema") or "",
                             subtemas_fijos=st.session_state.get("_perfil_subtemas_fijos") or [],
                             clasificar_tipo_genero=bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
+                            tono_distrito_positivo=bool(st.session_state.get("_perfil_tono_distrito_positivo")),
                             formato_boletin=bool(st.session_state.get("_perfil_formato_boletin")),
                             hora_boletin_corte_manana=st.session_state.get("_perfil_hora_boletin_corte_manana", 13),
                             hora_boletin_corte_tarde=st.session_state.get("_perfil_hora_boletin_corte_tarde", 18),

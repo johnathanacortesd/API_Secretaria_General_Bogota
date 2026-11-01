@@ -808,14 +808,17 @@ def _url_link_ext(row) -> str:
     return ""
 
 
-_OPINION_URL_STEMS = ('opinion', 'columna', 'editorial')
+_EDITORIAL_URL_STEMS = ('editorial',)
+_REPORTAJE_URL_STEMS = ('reportaje', 'especial', 'investigacion')
+_OPINION_URL_STEMS = ('opinion', 'columna')
 
 
 def aplicar_genero_por_url(rows) -> int:
     """GÉNERO por la URL web (v1.13/v1.9, 2026-10-31): si la Web Ext de la
     nota (URL Nota, solo Internet, el mismo valor que se exporta) trae
-    /opinion/, /columna(s)/ o /editorial/ y el grupo quedó como Noticia,
-    la fila pasa a Opinión. Solo sube Noticia a Opinión: nunca sobrescribe
+    /editorial/, /reportaje/, /especial/, /investigacion/, /opinion/ o
+    /columna(s)/ y el grupo quedó como Noticia, la fila pasa a
+    Editorial, Reportaje u Opinión en ese orden (v1.20). Solo sube Noticia a Opinión: nunca sobrescribe
     una Entrevista, una Opinión ya asignada ni una duplicada ('-'). Es el
     mismo criterio del rescate por Sección, pero con la evidencia de la
     URL (una columna de opinión como la de elpilon.com.co/opinion/...
@@ -831,7 +834,15 @@ def aplicar_genero_por_url(rows) -> int:
         # v1.19: el nombre del diario La Opinión no cuenta como Opinión
         # (su dominio contiene "opinion" pero no es una columna de opinión).
         url = _quitar_nombre_la_opinion((_url_web_ext(row) or '').lower())
-        if any(s in url for s in _OPINION_URL_STEMS):
+        # v1.20: orden Editorial -> Reportaje -> Opinión; solo desde
+        # Noticia (las demás guardas no cambian).
+        if any(s in url for s in _EDITORIAL_URL_STEMS):
+            row['GÉNERO'] = 'Editorial'
+            cambios += 1
+        elif any(s in url for s in _REPORTAJE_URL_STEMS):
+            row['GÉNERO'] = 'Reportaje'
+            cambios += 1
+        elif any(s in url for s in _OPINION_URL_STEMS):
             row['GÉNERO'] = 'Opinión'
             cambios += 1
     return cambios
@@ -1129,6 +1140,7 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
                                criterio_texto="", taxonomia=None, guia_subtema="",
                                subtemas_fijos=None,
                                clasificar_tipo_genero=False,
+                               tono_distrito_positivo=False,
                                formato_boletin=False,
                                hora_boletin_corte_manana=13,
                                hora_boletin_corte_tarde=18,
@@ -1158,6 +1170,7 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
         "guia_subtema": (guia_subtema or "").strip(),
         "subtemas_fijos": list(subtemas_fijos or []),
         "clasificar_tipo_genero": bool(clasificar_tipo_genero),
+        "tono_distrito_positivo": bool(tono_distrito_positivo),
         "formato_boletin": bool(formato_boletin),
         "hora_boletin_corte_manana": hora_boletin_corte_manana if (isinstance(hora_boletin_corte_manana, int)
             and not isinstance(hora_boletin_corte_manana, bool) and 0 <= hora_boletin_corte_manana <= 23) else 13,

@@ -1743,8 +1743,9 @@ def _cubo_mas_cercano(sub_tema: str, titulo: str, tax: dict) -> Optional[str]:
 # exactamente los de antes. TIPO describe la relación de la noticia con la
 # entidad (no el tipo de medio); GÉNERO describe la forma periodística.
 # ============================================================================
-TIPOS_VALIDOS = ["Institucional", "Proyectos y programas", "Información general"]
-GENEROS_VALIDOS = ["Noticia", "Opinión", "Entrevista"]
+TIPOS_VALIDOS = ["Institucional", "Proyectos y programas", "Información general",
+                 "Ranking", "Opinión de terceros"]
+GENEROS_VALIDOS = ["Noticia", "Opinión", "Entrevista", "Editorial", "Reportaje"]
 TIPO_DEFECTO = "Información general"
 GENERO_DEFECTO = "Noticia"
 REGLAS_TIPO_GENERO = (
@@ -1753,22 +1754,38 @@ REGLAS_TIPO_GENERO = (
     "actos, o si interviene su vocero (el vocero indicado arriba) en nombre de la entidad: la "
     "intervención del vocero también es Institucional, aunque hable de un proyecto. "
     "«Proyectos y programas» si la noticia trata de un proyecto, programa, iniciativa o acción "
-    "concreta que no es institucional en sí. «Información general» si la noticia solo menciona "
+    "concreta que no es institucional en sí. «Ranking» si la noticia trata de la aparición "
+    "de la entidad en un ranking o listado de posicionamiento (puestos, escalafón, «entre "
+    "las mejores»). «Opinión de terceros» si la sustancia de la noticia es la opinión de "
+    "una persona que NO hace parte de la entidad acerca de la marca; si quien opina es "
+    "vocero o funcionario de la entidad, es Institucional, no esto. «Información general» "
+    "si la noticia solo menciona "
     "de forma general o referencial a la entidad o al cargo, sin que sea el tema central ni un "
-    "proyecto concreto. Precedencia: vocero o asunto propio -> Institucional; si no, proyecto "
-    "concreto -> Proyectos y programas; si no, referencia general -> Información general. "
+    "proyecto concreto. Precedencia: Ranking -> Opinión de terceros -> vocero o asunto "
+    "propio -> Institucional; si no, proyecto concreto -> Proyectos y programas; si no, "
+    "referencia general -> Información general. "
     "GÉNERO (forma periodística): «Entrevista» solo si hay un diálogo claro de preguntas y "
     "respuestas entre dos personas que se alternan (por ejemplo, marcas como «VD: ¿…? / DJ: …» "
     "con preguntas y respuestas sucesivas). «Opinión» solo si es una columna de opinión firmada, "
     "con voz argumentativa del autor; una noticia que cita o recoge la intervención de otra "
-    "persona NO es opinión, y una sola declaración o cita tampoco es entrevista. En cualquier "
+    "persona NO es opinión, y una sola declaración o cita tampoco es entrevista. «Editorial» "
+    "si es la voz institucional del medio, sin firma de un tercero (sección o URL editorial). "
+    "«Reportaje» si es crónica, investigación o especial extenso con estructura narrativa y "
+    "varias fuentes, sin diálogo de preguntas y respuestas ni firma de opinión. En cualquier "
     "otro caso, y SIEMPRE que dudes, «Noticia»."
 )
 
 
 def _canon_tipo_genero(valor, validos):
-    """Canónico exacto tolerante a mayúsculas/acentos; None si no es válido."""
+    """Canónico exacto tolerante a mayúsculas/acentos; None si no es válido.
+
+    v1.20: el spec escribe "Programas y proyectos" y el literal
+    publicado es "Proyectos y programas": se acepta el orden
+    invertido y se mapea al canónico (no se renombra lo publicado).
+    """
     v = nz(str(valor or ""))
+    if v == nz("Programas y proyectos") and "Proyectos y programas" in validos:
+        return "Proyectos y programas"
     for c in validos:
         if nz(c) == v:
             return c
@@ -1838,8 +1855,52 @@ def aplicar_genero_por_seccion(rows, mapa, etiquetas, km):
             if i >= len(rows):
                 continue
             sec = _quitar_nombre_la_opinion(nz(str(rows[i].get(sec_col) or rows[i].get("Sección - Programa") or "")))
+            # v1.20: Editorial y Reportaje antes que Opinión.
+            if "editorial" in sec:
+                e["genero"] = "Editorial"
+                cambios += 1
+                break
+            if ("reportaje" in sec or "especial" in sec
+                    or "investigacion" in sec or "cronica" in sec):
+                e["genero"] = "Reportaje"
+                cambios += 1
+                break
             if "opinion" in sec or "columna" in sec:
                 e["genero"] = "Opinión"
+                cambios += 1
+                break
+    return cambios
+
+
+_RANKING_TITULO_PAT = re.compile(r'\b(ranking|listado|posicionamiento|escalaf[óo]n)\b', re.IGNORECASE)
+
+
+def aplicar_tipo_por_ranking(rows, mapa, etiquetas, km, brand, aliases):
+    """Rescate TIPO=Ranking (v1.20, solo con flag clasificar_tipo_genero):
+    título con ranking/listado/posicionamiento/escalafón + marca/alias
+    presente, y tipo actual Información general, pasa a Ranking. Solo
+    sube desde Información general: nunca pisa Institucional ni otros
+    valores. Devuelve nº de grupos cambiados."""
+    actores = [nz(x) for x in [brand] + list(aliases or [])
+               if x and len(nz(x)) >= 4]
+    if not actores:
+        return 0
+    filas_por_grupo = defaultdict(list)
+    for i, gid in (mapa or {}).items():
+        if gid:
+            filas_por_grupo[gid].append(i)
+    cambios = 0
+    for gid, idxs in filas_por_grupo.items():
+        e = etiquetas.get(gid) or {}
+        if e.get("tipo") != "Información general":
+            continue
+        for i in idxs:
+            if i >= len(rows):
+                continue
+            titulo = _titulo_fila(rows[i], km) or ""
+            nt = nz("%s\n%s" % (titulo, _texto_fila(rows[i], km) or ""))
+            if _RANKING_TITULO_PAT.search(titulo) and any(a in nt for a in actores):
+                e["tipo"] = "Ranking"
                 cambios += 1
                 break
     return cambios
@@ -1878,6 +1939,11 @@ def prompt_sistema(cfg: dict) -> str:
     if cfg.get('clasificar_tipo_genero'):
         idx_ej = lineas.index('EJEMPLOS YA ETIQUETADOS (imita el criterio, la brevedad y las mayusculas)')
         lineas[idx_ej:idx_ej] = ['', 'REGLA DE TIPO Y GÉNERO', REGLAS_TIPO_GENERO]
+    # v1.20: tono del distrito (solo si el perfil lo pide): el primer
+    # pase LLM ya se acerca; la función determinista corrige lo que desvíe.
+    if cfg.get('tono_distrito_positivo'):
+        idx_ej = lineas.index('EJEMPLOS YA ETIQUETADOS (imita el criterio, la brevedad y las mayusculas)')
+        lineas[idx_ej:idx_ej] = ['', 'REGLA DE TONO DEL DISTRITO: un hecho del distrito para bien (gestión, obra, programa, zona segura, plantación de árboles) sin críticas es Positivo; con críticas al hecho bueno es Neutro.']
     ejemplos = list(EJEMPLOS) + EJEMPLOS_TEMA
     if crit.startswith('Favorabilidad'):
         ejemplos += EJEMPLOS_SECTOR
@@ -1890,8 +1956,8 @@ def prompt_sistema(cfg: dict) -> str:
             'SALIDA: solo JSON, sin markdown y sin explicaciones:',
             '{"resultados":[{"id":<numero de grupo>,"sub_tema":"<3 a 5 palabras>",'
             '"tono":"Positivo|Neutro|Negativo",'
-            '"tipo":"Institucional|Proyectos y programas|Información general",'
-            '"genero":"Noticia|Opinión|Entrevista"}]}',
+            '"tipo":"Institucional|Proyectos y programas|Información general|Ranking|Opinión de terceros",'
+            '"genero":"Noticia|Opinión|Entrevista|Editorial|Reportaje"}]}',
             'Un objeto por cada grupo recibido, con su id exacto.',
         ]
     else:
@@ -6086,6 +6152,7 @@ def enrich_rows_with_ai(
         'guia_subtema': (extra.get('guia_subtema') or '').strip(),
         'subtemas_fijos': extra.get('subtemas_fijos') or [],
         'clasificar_tipo_genero': bool(extra.get('clasificar_tipo_genero')),
+        'tono_distrito_positivo': bool(extra.get('tono_distrito_positivo')),
         'api_key': api_key,
         'typesafe_api_key': extra.get('typesafe_api_key') or '',
         'typesafe_model': extra.get('typesafe_model') or 'jev-latest',
@@ -6303,6 +6370,8 @@ def enrich_rows_with_ai(
     # v1.6: género por sección del dossier (solo si el perfil lo pide).
     if cfg.get('clasificar_tipo_genero'):
         aplicar_genero_por_seccion(rows, mapa, etiquetas, km)
+        # v1.20: TIPO Ranking por título (solo desde Información general).
+        aplicar_tipo_por_ranking(rows, mapa, etiquetas, km, brand, aliases)
 
     # v1.10: garantía FINAL y determinista (2026-10-31): mismo Título
     # (igual o levemente igual) => mismo Subtema_IA. Corre después de
@@ -6320,6 +6389,18 @@ def enrich_rows_with_ai(
     _bajados_decreto = aplicar_regla_decreto(grupos, etiquetas)
     if _bajados_decreto:
         _ULTIMO_RESUMEN['tono_decreto_neutralizado'] = _bajados_decreto
+
+    # v1.20: tono del distrito (solo si el perfil lo pide). Corre justo
+    # después del decreto y antes de la fidelidad final: Jev y el voto
+    # final ya pasaron, así que nadie lo revierte; la fidelidad final
+    # solo toca el subtema.
+    _distrito = []
+    if cfg.get('tono_distrito_positivo'):
+        _distrito = aplicar_regla_distrito(
+            grupos, etiquetas, brand, aliases,
+            voceros=cfg.get('voceros') or [])
+    if _distrito:
+        _ULTIMO_RESUMEN['tono_distrito'] = _distrito
 
     # v1.13/v1.9 (2026-10-31): fidelidad FINAL por fila (ver
     # aplicar_fidelidad_final_subtema). Es el último pase que toca el
@@ -7169,6 +7250,127 @@ _CRITICA_DECRETO_STEMS = (
     'carencia',
 )
 
+
+# ---------------------------------------------------------------------------
+# v1.20 — Tono del distrito (solo Secretaría, flag tono_distrito_positivo).
+# Hechos del distrito para bien sin críticas = Positivo; hecho bueno +
+# crítica = Neutro; solo críticas (sin hecho bueno) = Negativo intacto.
+# Lectura de decreto (respuesta del usuario 2026-11-01): con beneficio
+# concreto + protagonismo, un decreto DE LA ALCALDÍA queda Positivo (el
+# distrito levanta el Neutro de la regla decreto); un decreto que NO es
+# de la alcaldía queda Neutro (el distrito no levanta; queda el Neutro
+# de la regla decreto). Decretos sin beneficio siguen la regla decreto.
+# "De alcaldía" = patrón de decreto + actor del perfil en ventana
+# cercana (±80 caracteres), o frase explícita (decreto distrital / de
+# la alcaldía / del alcalde). Si no se puede atribuir, se trata como NO
+# de alcaldía. Duda documentada (no resuelta): un decreto no de alcaldía
+# + beneficio + tono previo ya Positivo queda Positivo (la regla
+# distrito no baja, solo no levanta); el Neutro forzado en ese caso
+# sería una línea más.
+# ---------------------------------------------------------------------------
+# Verbos de acción propia: stems de aplicar_guarda_positiva (coincidencia
+# por inicio de palabra) + acompañ-/facilit- (caso TransMilenio/Alcaldía
+# 2026-11-01: "acompañará" y "facilitar" son beneficio aunque la guarda
+# no liste esos verbos). 'abr' no está (colisiona con abril) ni 'gan'
+# (demasiado corto); las frases de puesta en marcha/servicio van aparte.
+_DISTRITO_VERBO_STEMS = (
+    'entreg', 'inaugur', 'constru', 'lanz', 'impuls', 'aprob', 'destin',
+    'invert', 'don', 'respald', 'apoy', 'capacit', 'organiz', 'convoc',
+    'celebr', 'realiz', 'present', 'anunci', 'public', 'socializ',
+    'recib', 'ocup', 'firm', 'atend', 'habilit',
+    'acompan', 'facilit',
+)
+_DISTRITO_VERBO_FRASES = ('pone en marcha', 'puso en marcha', 'pone en servicio')
+_DISTRITO_BENEFICIO_SUST = (
+    'plantacion', 'siembra', 'arbol', 'reforestacion', 'iniciativa',
+    'programa', 'proyecto', 'jornada', 'subsidio', 'parque', 'obra',
+    'beneficio', 'acompanamiento',
+)
+_DISTRITO_BENEFICIO_FRASES = ('zona segura', 'zonas seguras')
+_DISTRITO_CORRUPCION_STEMS = ('corrup', 'sobrecost', 'malvers', 'despilfarr', 'fraude')
+_DISTRITO_ALCALDIA_FRASES = (
+    'decreto distrital', 'de la alcaldia', 'del alcalde',
+    'acuerdo distrital', 'resolucion distrital',
+)
+
+
+def _hecho_bueno_distrito(nt: str) -> bool:
+    """True si el texto normalizado trae beneficio: verbo de acción propia
+    (inicio de palabra), frase de puesta en marcha/servicio, sustantivo
+    de beneficio (inicio de palabra) o frase de zona segura."""
+    if any(f in nt for f in _DISTRITO_VERBO_FRASES + _DISTRITO_BENEFICIO_FRASES):
+        return True
+    if re.search(r'\b(?:' + '|'.join(_DISTRITO_VERBO_STEMS + _DISTRITO_BENEFICIO_SUST) + r')\w*', nt):
+        return True
+    return False
+
+
+def _decreto_de_alcaldia(texto: str, actores) -> bool:
+    """True si el patrón de decreto del texto es de la alcaldía: frase
+    explícita, o actor del perfil en ventana cercana (±80) al patrón.
+    El patrón se busca sobre el texto normalizado para que las
+    posiciones coincidan con la ventana."""
+    nt = nz(texto)
+    if not _DECRETO_PAT.search(nt):
+        return False
+    if any(f in nt for f in _DISTRITO_ALCALDIA_FRASES):
+        return True
+    for m in _DECRETO_PAT.finditer(nt):
+        ventana = nt[max(0, m.start() - 80): m.end() + 80]
+        if any(a and a in ventana for a in actores):
+            return True
+    return False
+
+
+def aplicar_regla_distrito(grupos, etiquetas, brand, aliases, voceros=()):
+    """Tono del distrito (v1.20, solo con flag tono_distrito_positivo).
+
+    Hecho del distrito para bien + protagonismo de la marca/alias/vocero:
+    sin crítica dirigida ni corrupción -> Positivo (sube desde Neutro y,
+    en este caso acotado, desde Negativo: un Negativo que sobrevivió a
+    negativo_sin_blanco con hecho bueno y sin crítica dirigida es tono
+    heredado de la noticia, no señalamiento); hecho bueno + crítica
+    dirigida -> Neutro (baja desde Positivo o Negativo). Sin protagonismo
+    o sin hecho bueno no se toca (ahí caen "solo críticas" y lo
+    referencial). Se saltan los grupos con neutro_pegajoso (la tragedia
+    manda). Con patrón de decreto sin atribuir a la alcaldía no se
+    levanta a Positivo (queda el Neutro de la regla decreto).
+    Devuelve los grupos corregidos.
+    """
+    actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
+               if x and len(nz(x)) >= 4]
+    if not actores:
+        return []
+    corregidos = []
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e:
+            continue
+        if (e.get('flags') or {}).get('neutro_pegajoso'):
+            continue
+        titulo = g.get('titulo') or ''
+        texto = g.get('contexto') or g.get('texto') or ''
+        if not _marca_protagonista(titulo, texto, actores):
+            continue
+        completo = '%s. %s' % (titulo, texto)
+        nt = nz(completo)
+        if not _hecho_bueno_distrito(nt):
+            continue
+        if _critica_dirigida(completo, brand, aliases):
+            if e.get('tono') != 'Neutro':
+                e['tono'] = 'Neutro'
+                corregidos.append(g.get('grupo'))
+            continue
+        # Sin crítica: la corrupción bloquea la subida (no baja).
+        if any(s in nt for s in _DISTRITO_CORRUPCION_STEMS):
+            continue
+        if e.get('tono') == 'Positivo':
+            continue
+        if _DECRETO_PAT.search(nt) and not _decreto_de_alcaldia(completo, actores):
+            continue
+        e['tono'] = 'Positivo'
+        corregidos.append(g.get('grupo'))
+    return corregidos
 
 def aplicar_regla_decreto(grupos, etiquetas):
     """Acto normativo sin crítica = Neutro (regla general, 2026-10-31).
