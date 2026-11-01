@@ -249,8 +249,9 @@ KEY_MAP = {
 THOUSANDS_COLS = {"Nro. Pagina", "Dimensión", "Duración - Nro. Caracteres", "Tier", "Audiencia"}
 CURRENCY_COLS = {"CPE"}
 NUMERIC_COLS = {"ID Noticia", "ID duplicada"} | THOUSANDS_COLS | CURRENCY_COLS
-# Display "Link" as black, non-underlined text while keeping the hyperlink.
+# Display "Link" as black, BOLD, non-underlined text while keeping the hyperlink.
 PLAIN_HYPERLINK_COLUMNS = frozenset({"Link Nota", "Link (Streaming - Imagen)"})
+PLAIN_HYPERLINK_COLUMNS_NORM = frozenset(c.strip().lower() for c in PLAIN_HYPERLINK_COLUMNS)
 
 REL_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 HYPERLINK_TAIL_BYTES = 4 * 1024 * 1024
@@ -1375,6 +1376,7 @@ def generate_output_excel(rows, km, progress: ProgressCb = None, columns_to_use:
     fmt_header = wb.add_format({"bold": True})
     fmt_link = wb.add_format({"font_color": "#0563C1", "underline": 1, "align": "left"})
     fmt_plain_hlink = wb.add_format({"font_color": "#000000", "underline": False, "align": "left"})
+    fmt_plain_hlink_bold = wb.add_format({"font_color": "#000000", "underline": False, "bold": True, "align": "left"})
     fmt_date = wb.add_format({"num_format": "dd/mm/yyyy", "align": "center"})
     fmt_currency = wb.add_format({"num_format": "$#,##0"})
     fmt_thousands = wb.add_format({"num_format": "#,##0"})
@@ -1399,7 +1401,7 @@ def generate_output_excel(rows, km, progress: ProgressCb = None, columns_to_use:
     try:
         _write_xlsx_rows(
             ws, rows, km, n, step, progress,
-            fmt_link, fmt_plain_hlink, fmt_date, fmt_currency, fmt_thousands, fmt_plain_id, cols,
+            fmt_link, fmt_plain_hlink, fmt_plain_hlink_bold, fmt_date, fmt_currency, fmt_thousands, fmt_plain_id, cols,
         )
         emit_progress(progress, 100, "Guardando archivo Excel…")
     finally:
@@ -1407,7 +1409,7 @@ def generate_output_excel(rows, km, progress: ProgressCb = None, columns_to_use:
     return buf.getvalue()
 
 
-def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink, fmt_date, fmt_currency, fmt_thousands, fmt_plain_id, cols):
+def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink, fmt_plain_hlink_bold, fmt_date, fmt_currency, fmt_thousands, fmt_plain_id, cols):
     for i, row in enumerate(rows):
         tk = km.get("titulo")
         if tk and tk in row:
@@ -1462,16 +1464,22 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
                 continue
             # v4.57: "Link Ext" y "Web Ext" con el enlace completo a la
             # noticia, mostrado completo y clicable (como "Audio").
-            if h in ("Link Ext", "Web Ext"):
-                url_ext = _url_link_ext(row) if h == "Link Ext" else _url_web_ext(row)
+            # Link Ext / Web Ext por encabezado NORMALIZADO (sin espacios
+            # ni mayúsculas, igual que ENLACE): en personalizada los
+            # encabezados del dossier se preservan tal cual, y una variante
+            # ("Link Ext ", "LINK EXT") no coincidía con la comparación
+            # exacta, caía en la rama genérica y salía azul con
+            # hipervínculo aunque el código desplegado fuera correcto.
+            _h_norm = h.strip().lower() if isinstance(h, str) else ""
+            if _h_norm in ("link ext", "web ext"):
+                url_ext = _url_link_ext(row) if _h_norm == "link ext" else _url_web_ext(row)
                 if url_ext:
                     # Link Ext SIEMPRE como TEXTO PLANO (orden del usuario,
-                    # Secretaría y Defensoría): negro, sin subrayado, sin
-                    # hipervínculo, igual que ENLACE. Sin flag ni caminos:
-                    # la v1.17 con flag fallaba en la pestaña personalizada
-                    # y sin IA porque esa config nunca llevaba el flag.
-                    # Web Ext sigue clicable, como antes.
-                    if h == "Link Ext":
+                    # Secretaría y Defensoría): color negro NORMAL, sin
+                    # negrilla, sin subrayado, sin hipervínculo (la
+                    # negrilla es solo para Link Nota / Streaming, no para
+                    # Link Ext). Web Ext sigue clicable, como antes.
+                    if _h_norm == "link ext":
                         ws.write_string(excel_row, cidx, url_ext, fmt_plain_hlink)
                     else:
                         ws.write_url(excel_row, cidx, url_ext, fmt_link, string=url_ext)
@@ -1537,7 +1545,7 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
 
             if url:
                 display = str(cv or "Link")
-                url_fmt = fmt_plain_hlink if h in PLAIN_HYPERLINK_COLUMNS else fmt_link
+                url_fmt = fmt_plain_hlink_bold if _h_norm in PLAIN_HYPERLINK_COLUMNS_NORM else fmt_link
                 try:
                     ws.write_url(excel_row, cidx, str(url), url_fmt, string=display)
                 except Exception:
