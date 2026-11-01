@@ -1465,7 +1465,16 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
             if h in ("Link Ext", "Web Ext"):
                 url_ext = _url_link_ext(row) if h == "Link Ext" else _url_web_ext(row)
                 if url_ext:
-                    ws.write_url(excel_row, cidx, url_ext, fmt_link, string=url_ext)
+                    # Link Ext SIEMPRE como TEXTO PLANO (orden del usuario,
+                    # Secretaría y Defensoría): negro, sin subrayado, sin
+                    # hipervínculo, igual que ENLACE. Sin flag ni caminos:
+                    # la v1.17 con flag fallaba en la pestaña personalizada
+                    # y sin IA porque esa config nunca llevaba el flag.
+                    # Web Ext sigue clicable, como antes.
+                    if h == "Link Ext":
+                        ws.write_string(excel_row, cidx, url_ext, fmt_plain_hlink)
+                    else:
+                        ws.write_url(excel_row, cidx, url_ext, fmt_link, string=url_ext)
                 else:
                     ws.write_blank(excel_row, cidx, None)
                 continue
