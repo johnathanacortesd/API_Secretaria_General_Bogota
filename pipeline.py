@@ -117,6 +117,19 @@ def texto_con_minimo(texto: str, resumen: str, titulo: str = "",
         if o in " ".join(partes):
             continue
         partes.append(o)
+    # v1.33: si el texto está al FINAL del resumen (p. ej. el crédito
+    # «Fuente: Alcaldía de Bogotá.»), no hay oraciones después: se toman
+    # las oraciones inmediatamente ANTERIORES, literales y en su orden.
+    if len(" ".join(partes).split()) < minimo and texto and res.find(texto) >= 0:
+        fin_previas = max(0, (inicio or 0) - 1)
+        previas = []
+        for o in reversed(oraciones[:fin_previas]):
+            if len(" ".join(previas + partes).split()) >= minimo:
+                break
+            if o in " ".join(partes):
+                continue
+            previas.insert(0, o)
+        partes = previas + partes
     return " ".join(" ".join(partes).split())
 
 def _audiencia_antes_de_tier(cols) -> List[str]:
@@ -1201,6 +1214,8 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
                                clasificar_tipo_genero=False,
                                tono_distrito_positivo=False,
                                agrupacion_estricta=False,
+                               tono_solo_gestion=False,
+                               tipo_por_actor=False,
                                formato_boletin=False,
                                hora_boletin_corte_manana=13,
                                hora_boletin_corte_tarde=18,
@@ -1232,6 +1247,8 @@ def construir_ai_config_custom(brand, alias_txt, voceros_txt, criterio,
         "clasificar_tipo_genero": bool(clasificar_tipo_genero),
         "tono_distrito_positivo": bool(tono_distrito_positivo),
         "agrupacion_estricta": bool(agrupacion_estricta),
+        "tono_solo_gestion": bool(tono_solo_gestion),
+        "tipo_por_actor": bool(tipo_por_actor),
         "formato_boletin": bool(formato_boletin),
         "hora_boletin_corte_manana": hora_boletin_corte_manana if (isinstance(hora_boletin_corte_manana, int)
             and not isinstance(hora_boletin_corte_manana, bool) and 0 <= hora_boletin_corte_manana <= 23) else 13,

@@ -458,3 +458,71 @@ parecidas; las notas específicas conservan su propio subtema.
 - Se quita la sección "📝 Resumen para informe" (pedido del usuario) y su
   módulo `resumen_informe.py`. Las secciones anteriores de este README que
   la describen quedan como historial.
+
+## Novedades v1.33 (2026-11-02; solo Secretaría)
+
+Correcciones a partir de la evaluación de un dossier real (189 notas, boletín
+1 p.m. del 2026-11-02): 107 de 176 notas salían Positivas y 0 Negativas; más
+de 60 Positivos eran menciones referenciales.
+
+- **Tono solo por gestión** (flag `tono_solo_gestion` en el perfil):
+  - Que el alcalde o la entidad *hable* (dijo, señaló, recordó) o firme una
+    columna ya no sube a Positivo: el Positivo exige gestión o labor.
+  - Menciones que no son de la marca se ignoran para el tono: el cargo
+    ("aspirante/candidato a la Alcaldía de Bogotá", "cuando Petro era
+    alcalde", "durante la administración de Petro", "sucesor del alcalde"),
+    otros alcaldes ("el alcalde Cristian Portilla", "el alcalde de Cali") y
+    homónimos del vocero ("Juan Manuel Galán").
+  - Condolencias, homenajes y reacciones del alcalde en noticias de
+    fallecimiento o despedida => Neutro (69 notas sobre Navarro Wolff salían
+    Positivas), salvo que la Alcaldía ejecute una gestión (anuncia, entrega…).
+  - Opinión de terceros con preocupación o crítica sobre la marca no puede
+    ser Positivo, y la regla del distrito no la sube.
+  - Criterio del perfil: sin "declaración que los deja bien" y con la lista
+    explícita de casos Neutros.
+  - Repetición sin conexión sobre el dossier: Positivos 107 -> 30.
+- **Variantes del mismo rótulo** (con agrupación estricta): "Fallecimiento de
+  Antonio Navarro" = "...Wolff" = "Muerte de Antonio Navarro Wolff" se unen
+  si el rótulo elegido corresponde a cada nota (Navarro: 18 -> 14 subtemas;
+  los ángulos distintos, como trayectoria o relación con Petro, quedan
+  aparte).
+- **Columna texto**: si el texto es un crédito al final del Resumen
+  ("Fuente: Alcaldía de Bogotá."), se completa con las oraciones
+  anteriores, literales (13 notas tenían 4 a 11 palabras).
+
+### v1.33, segunda parte: calibración con 132 notas etiquetadas a mano
+
+Con el archivo de etiquetas manuales del usuario (IMPACTO, TEMA, TIPO,
+GÉNERO) se midió el acierto real y se calibraron las reglas:
+
+| | v1.32 | v1.33 |
+|---|---|---|
+| Tono | 34 % | 93 % |
+| TIPO | 43 % | 75 % |
+| GÉNERO | 100 % | 100 % |
+| Subtemas distintos (manual: 27) | 57 | 35 |
+| Navarro Wolff (71 notas) | 19 subtemas | 3 |
+
+- **Tono** (con `tono_solo_gestion`):
+  - Medidas restrictivas del Distrito en el titular (pico y placa,
+    restricciones, decretos, calendario) => Neutro.
+  - Regla del usuario: Alcaldía solo como crédito => Neutro, pero si una
+    secretaría distrital, una entidad del Distrito o un funcionario
+    ejecuta la gestión => Positivo. También es Positivo el titular con
+    "Bogotá" o la Alcaldía como sujeto de una gestión ("Bogotá nombra",
+    "Bogotá abre convocatoria").
+  - Nombramientos, convocatorias, aperturas, inversiones y capturas
+    cuentan como gestión.
+  - Crítica de un tercero que nombra a la marca o a su vocero => Negativo
+    (si no la nombra, Neutro).
+- **TIPO** (flag `tipo_por_actor`): medida normativa del Distrito =>
+  Institucional; sin mención válida de la marca (solo el cargo,
+  administraciones pasadas, otros alcaldes u homónimos) => Información
+  general; Información general en que el alcalde, el secretario o la
+  entidad habla o actúa oficialmente => Institucional.
+- **Subtema: un solo subtema por evento grande** (regla del usuario, en
+  agrupación estricta): las notas cuyos titulares comparten una frase
+  distintiva repetida en al menos 3 titulares ("navarro wolff", "pico
+  placa", "plan retorno") toman el subtema más frecuente del bloque, si
+  corresponde a cada nota (titular + Contexto analizado + inicio del
+  cuerpo).
