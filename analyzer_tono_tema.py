@@ -425,7 +425,7 @@ MODELO_DEFECTO = "gpt-6-luna"
 # v4.53: sello del analizador. El encabezado de la app lo muestra junto a
 # APP_VERSION; si el despliegue muestra un sello distinto (o "sin-sello"),
 # el contenedor NO corre este archivo aunque el encabezado diga otra versión.
-ANALYZER_BUILD = "v4.68-sin-hecho-informativo"  # v4.62: ancla de riesgo + clases de sinonimia
+ANALYZER_BUILD = "v4.69-coherencia-por-hecho"  # v4.62: ancla de riesgo + clases de sinonimia
 # v4.53: solo cambia el sello (la lógica del analizador no se toca en esta versión;
 # el cambio es de interfaz).
 JEV_URL_DEFECTO = "https://api.typesafe.ai/v1/systemone"
@@ -4604,6 +4604,410 @@ def unificar_subtemas_llm(cfg, grupos, etiquetas, uso=None):
     return cambios
 
 
+# ============================================================================
+# v1.29 (2026-11-02): COHERENCIA POR HECHO.
+#
+# Problema reportado: noticias iguales o similares quedaban con subtemas
+# distintos (y a veces con tono distinto), y algunos subtemas no tenían
+# relación con la noticia. Causas encontradas:
+#   1. Los lotes de etiquetado corren en paralelo y no se ven entre sí, y la
+#      unificación LLM previa solo veía la LISTA de subtemas (sin la
+#      noticia), con veto total ante cualquier Negativo.
+#   2. Los pases finales por fila (fidelidad, anti-copia, título-final)
+#      reescriben subtemas DESPUÉS de que el tono ya se había unificado, así
+#      que el mismo subtema final podía salir con tonos distintos.
+# Solución en dos piezas:
+#   * `consolidar_hechos_llm`: el modelo ve TODAS las noticias (titular +
+#     entrada + subtema propuesto) y agrupa las que cuentan el mismo hecho
+#     con un único subtema. Cada fusión se valida en código: el subtema
+#     elegido debe ser fiel (nombres propios + asunto) al titular/cuerpo de
+#     CADA noticia del hecho; si no, no se agrupa (agrupar con lógica, no
+#     agrupar por agrupar). También corrige subtemas que no corresponden a
+#     su noticia, solo si el actual falla el cotejo de fidelidad.
+#   * `garantizar_coherencia_hecho`: último pase antes de volcar. Misma
+#     noticia (mismo grupo, mismo hecho consolidado o mismo titular) =>
+#     mismo subtema, si existe un rótulo fiel a todas; y mismo subtema
+#     final => mismo tono (mayoría por número de notas; empate => Neutro).
+# ============================================================================
+TAM_BLOQUE_CONSOLIDACION = 140
+
+
+def _fuentes_grupo(g: dict) -> Tuple[str, str]:
+    """(titulares, cuerpo+contexto) de un grupo para los cotejos de fidelidad."""
+    tit = ' '.join([str(g.get('titulo') or '')] + [str(t) for t in (g.get('titulos_alt') or [])])
+    txt = ' '.join([str(g.get('texto') or ''), str(g.get('contexto') or ''),
+                    str(g.get('contexto_marca') or '')])
+    return tit, txt
+
+
+def _rotulo_fiel(s: str, tit: str, txt: str, brand: str = '',
+                 aliases: Sequence[str] = ()) -> bool:
+    """Nombres propios y asunto del rótulo presentes en la noticia."""
+    return (_etiqueta_fiel_a_texto(s, tit, txt, brand, aliases)
+            and _asunto_fiel_a_texto(s, tit, txt, brand, aliases))
+
+
+def _rotulo_bien_formado(s: str, titulos: Sequence[str]) -> bool:
+    """Sin problemas duros de `validar` frente a ninguno de los titulares."""
+    s = str(s or '').strip()
+    if not s:
+        return False
+    for t in (titulos or ['']):
+        pr = validar(s, 'Neutro', [t])
+        if any(not p.startswith('revisar_anclaje') for p in pr):
+            return False
+    return True
+
+
+def _orden_por_afinidad(grupos: Sequence[dict], etiquetas: Dict[int, dict]) -> List[dict]:
+    """Ordena los grupos para que las noticias parecidas queden contiguas
+    (y así en el mismo bloque de consolidación cuando hay muchos grupos).
+    Recorrido en anchura sobre un grafo de palabras distintivas compartidas
+    (subtema + titular)."""
+    toks = {}
+    for g in grupos:
+        e = etiquetas.get(g['grupo']) or {}
+        toks[g['grupo']] = (_contenido_discriminante(
+            '%s %s' % (e.get('sub_tema') or '', g.get('titulo') or ''))
+            - GENERICO_NO_UNEN)
+    por_tok = defaultdict(list)
+    for gid, ts in toks.items():
+        for t in ts:
+            por_tok[t].append(gid)
+    vecinos = defaultdict(Counter)
+    for lst in por_tok.values():
+        if len(lst) > 40:  # palabra omnipresente: no es puente
+            continue
+        for a in lst:
+            for b in lst:
+                if a != b:
+                    vecinos[a][b] += 1
+    por_id = {g['grupo']: g for g in grupos}
+    vistos, orden = set(), []
+    for g in grupos:
+        if g['grupo'] in vistos:
+            continue
+        cola = [g['grupo']]
+        vistos.add(g['grupo'])
+        while cola:
+            x = cola.pop(0)
+            orden.append(por_id[x])
+            for y, _n in vecinos[x].most_common():
+                if y not in vistos:
+                    vistos.add(y)
+                    cola.append(y)
+    return orden
+
+
+def prompt_consolidacion(cfg: dict, bloque: Sequence[dict],
+                         etiquetas: Dict[int, dict]) -> List[dict]:
+    lineas = []
+    for g in bloque:
+        e = etiquetas.get(g['grupo']) or {}
+        entrada = sq(g.get('texto') or g.get('contexto') or '')[:260]
+        lineas.append('id=%d | SUBTEMA PROPUESTO: «%s» | TITULAR: %s | ENTRADA: %s'
+                      % (g['grupo'], e.get('sub_tema') or '', sq(g.get('titulo') or '')[:200],
+                         entrada))
+    marca = cfg.get('brand') or 'la entidad'
+    voceros = ', '.join(cfg.get('voceros') or []) or 'no definido'
+    sistema = (
+        'Eres editor jefe de un monitoreo de medios en Colombia para %s (voceros: %s). '
+        'Revisas los subtemas de un dossier completo para que sean COHERENTES: la misma '
+        'noticia o el mismo hecho lleva exactamente el mismo subtema, y cada subtema '
+        'describe de verdad su noticia. Respondes solo JSON.' % (marca, voceros))
+    usuario = (
+        'NOTICIAS DEL DOSSIER (cada id es un grupo de notas):\n' + '\n'.join(lineas) + '\n\n'
+        'TAREA\n'
+        '1. Agrupa los ids que cuentan el MISMO HECHO: el mismo anuncio, decisión, obra, '
+        'evento, incidente, polémica o declaración, aunque lo cuenten medios distintos, con '
+        'otras palabras o con otro ángulo del MISMO hecho (anuncio, detalles, reacciones a ese hecho).\n'
+        '2. NO agrupes hechos distintos que solo comparten la entidad, el alcalde, el vocero, '
+        'la ciudad, el sector o una palabra genérica (seguridad, movilidad, salud, obras). '
+        'Dos anuncios distintos del mismo alcalde son dos hechos. Ante la duda, NO agrupes.\n'
+        '3. Para cada hecho escribe UN subtema de 3 a 5 palabras, frase nominal, que '
+        'sirva para TODAS sus noticias: si uno de los propuestos ya lo hace, reutilízalo '
+        'tal cual. No copies el titular, no empieces con verbo ni preposición, no uses '
+        'rótulos vacíos (Gestión del alcalde, Noticias de Bogotá, Alcaldía de Bogotá).\n'
+        '4. Si un subtema propuesto NO describe su noticia (habla de otro asunto), '
+        'corrígelo con el hecho principal de esa noticia.\n'
+        '5. Todos los ids deben aparecer exactamente una vez (un hecho puede tener un solo id).\n\n'
+        'Responde {"hechos":[{"ids":[<id>,...],"sub_tema":"..."}]}')
+    return [{'role': 'system', 'content': sistema}, {'role': 'user', 'content': usuario}]
+
+
+def _aplicar_hecho_consolidado(ids: Sequence[int], propuesta: str,
+                               por_id: Dict[int, dict], etiquetas: Dict[int, dict],
+                               brand: str, aliases: Sequence[str],
+                               clave_hecho: str) -> int:
+    """Aplica un hecho devuelto por el modelo, validado en código.
+    Devuelve cuántos grupos cambiaron de subtema."""
+    ids = [i for i in ids if i in por_id and i in etiquetas]
+    if not ids:
+        return 0
+    fuentes = {i: _fuentes_grupo(por_id[i]) for i in ids}
+    titulos = [str(por_id[i].get('titulo') or '') for i in ids]
+    propuesta = re.sub(r'\s+', ' ', str(propuesta or '')).strip(' .«»"\'')
+    cambios = 0
+    if len(ids) == 1:
+        gid = ids[0]
+        e = etiquetas[gid]
+        actual = (e.get('sub_tema') or '').strip()
+        tit, txt = fuentes[gid]
+        # Corrección de un subtema ajeno: solo si el actual NO es fiel a su
+        # noticia y la propuesta sí lo es.
+        if (propuesta and nz(propuesta) != nz(actual)
+                and actual and not _rotulo_fiel(actual, tit, txt, brand, aliases)
+                and _rotulo_fiel(propuesta, tit, txt, brand, aliases)
+                and _rotulo_bien_formado(propuesta, titulos)):
+            e['sub_tema'] = propuesta
+            cambios += 1
+        return cambios
+    # Candidatos: la propuesta del modelo y luego los subtemas actuales del
+    # hecho (más notas primero). Gana el primero bien formado y fiel a TODAS
+    # las noticias del hecho; si ninguno lo es, no se agrupa.
+    peso = Counter()
+    forma = {}
+    for i in ids:
+        s = (etiquetas[i].get('sub_tema') or '').strip()
+        if s:
+            peso[nz(s)] += int(por_id[i].get('n') or 1)
+            forma.setdefault(nz(s), s)
+    candidatos = ([propuesta] if propuesta else []) + \
+        [forma[k] for k, _n in sorted(peso.items(), key=lambda kv: (-kv[1], -len(kv[0])))]
+    canon = ''
+    for c in candidatos:
+        if _rotulo_bien_formado(c, titulos) and all(
+                _rotulo_fiel(c, t, x, brand, aliases) for t, x in fuentes.values()):
+            canon = c
+            break
+    if not canon:
+        return 0
+    for i in ids:
+        e = etiquetas[i]
+        e['hecho'] = clave_hecho
+        if nz(e.get('sub_tema') or '') != nz(canon):
+            e['sub_tema'] = canon
+            cambios += 1
+    return cambios
+
+
+def consolidar_hechos_llm(cfg: dict, grupos: Sequence[dict], etiquetas: Dict[int, dict],
+                          uso: Optional[dict] = None, workers: int = WORKERS_DEFECTO,
+                          tam_bloque: int = TAM_BLOQUE_CONSOLIDACION) -> Optional[int]:
+    """Consolidación de subtemas por hecho con la noticia a la vista.
+
+    Devuelve el número de grupos cuyo subtema cambió, o None si ninguna
+    llamada al modelo respondió (el llamador usa entonces la unificación
+    anterior por lista de subtemas)."""
+    grupos = [g for g in grupos if g.get('grupo') in etiquetas]
+    if len(grupos) <= 1:
+        return 0
+    brand = cfg.get('brand') or ''
+    aliases = list(cfg.get('aliases') or [])
+    por_id = {g['grupo']: g for g in grupos}
+    orden = _orden_por_afinidad(grupos, etiquetas)
+    bloques = [orden[i:i + tam_bloque] for i in range(0, len(orden), tam_bloque)]
+
+    def _trabajo(bloque):
+        try:
+            txt = llamar_llm(cfg, prompt_consolidacion(cfg, bloque, etiquetas),
+                             json_mode=True, max_tokens=6000, uso=uso)
+            return bloque, (_json_loose(txt) or {})
+        except Exception:
+            return bloque, None
+
+    if len(bloques) > 1:
+        with ThreadPoolExecutor(max_workers=max(1, int(workers))) as ex:
+            respuestas = list(ex.map(_trabajo, bloques))
+    else:
+        respuestas = [_trabajo(bloques[0])]
+    if all(r is None for _b, r in respuestas):
+        return None
+    cambios = 0
+    n_hecho = 0
+    for bloque, data in respuestas:
+        if not isinstance(data, dict):
+            continue
+        validos = {g['grupo'] for g in bloque}
+        usados = set()
+        for h in data.get('hechos') or []:
+            if not isinstance(h, dict):
+                continue
+            ids = []
+            for x in h.get('ids') or []:
+                try:
+                    x = int(x)
+                except Exception:
+                    continue
+                if x in validos and x not in usados and x not in ids:
+                    ids.append(x)
+            if not ids:
+                continue
+            usados.update(ids)
+            n_hecho += 1
+            cambios += _aplicar_hecho_consolidado(
+                ids, h.get('sub_tema') or '', por_id, etiquetas, brand, aliases,
+                'h%d' % n_hecho)
+    if cambios:
+        _ULTIMO_RESUMEN['subtemas_consolidados_por_hecho'] = cambios
+    return cambios
+
+
+def garantizar_coherencia_hecho(rows: List[dict], mapa: Dict[int, int],
+                                etiquetas: Dict[int, dict],
+                                ajustes_subtema: Optional[Dict[int, str]], km: dict,
+                                brand: str = '', aliases: Sequence[str] = ()
+                                ) -> Tuple[Dict[int, str], int, int]:
+    """Garantía FINAL (v1.29): misma noticia => mismo subtema y mismo tono.
+
+    1. Subtema: une filas del mismo grupo, del mismo hecho consolidado o con
+       el mismo titular (normalizado). Dentro de cada bloque, si hay varios
+       rótulos, gana el más frecuente que sea bien formado y fiel a TODAS las
+       filas del bloque. Si ninguno lo es (el bloque mezcla hechos), cada
+       fila toma el rótulo más frecuente del bloque que sí le sea fiel.
+    2. Tono: los grupos que comparten un subtema final (o un hecho
+       consolidado) quedan con un solo tono: el de más notas; empate =>
+       Neutro si está entre los empatados (regla de prudencia).
+
+    Devuelve (ajustes, filas_con_subtema_cambiado, grupos_con_tono_cambiado).
+    """
+    ajustes = dict(ajustes_subtema or {})
+    filas = [i for i, r in enumerate(rows) if not r.get('is_duplicate') and mapa.get(i) is not None]
+    if not filas:
+        return ajustes, 0, 0
+
+    def _final(i):
+        s = (ajustes.get(i) or '').strip()
+        if not s:
+            s = str((etiquetas.get(mapa.get(i)) or {}).get('sub_tema') or '').strip()
+        return s
+
+    finales = {i: _final(i) for i in filas}
+    tit = {i: _titulo_fila(rows[i], km) for i in filas}
+    txt = {i: _texto_fila(rows[i], km) for i in filas}
+
+    par = {i: i for i in filas}
+
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    def uni(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            par[max(ra, rb)] = min(ra, rb)
+
+    primero = {}
+    for i in filas:
+        gid = mapa.get(i)
+        claves = [('g', gid)]
+        hecho = (etiquetas.get(gid) or {}).get('hecho')
+        if hecho:
+            claves.append(('h', hecho))
+        nt = nz(tit[i])
+        if len([w for w in nt.split() if w not in GENERIC_TITULO]) >= 3:
+            claves.append(('t', nt))
+        for c in claves:
+            if c in primero:
+                uni(i, primero[c])
+            else:
+                primero[c] = i
+
+    bloques = defaultdict(list)
+    for i in filas:
+        bloques[find(i)].append(i)
+
+    cambios_sub = 0
+    for miembros in bloques.values():
+        conteo = Counter(nz(finales[i]) for i in miembros if finales[i])
+        if len(conteo) <= 1:
+            continue
+        forma = {}
+        for i in miembros:
+            if finales[i]:
+                forma.setdefault(nz(finales[i]), finales[i])
+        # Textos distintos del bloque (las réplicas no cuentan dos veces).
+        distintas = {}
+        for i in miembros:
+            distintas.setdefault((nz(tit[i]), nz(txt[i])[:400]), i)
+        reps = list(distintas.values())
+        anclaje = {k: sum(1 for i in reps if _anclaje_titulo(forma[k], tit[i], brand, aliases))
+                   for k in conteo}
+        orden = sorted(conteo, key=lambda k: (-conteo[k], -anclaje[k], -len(k.split())))
+        canon = ''
+        for k in orden:
+            c = forma[k]
+            if _rotulo_bien_formado(c, [tit[i] for i in reps]) and all(
+                    _rotulo_fiel(c, tit[i], txt[i], brand, aliases) for i in reps):
+                canon = c
+                break
+        for i in miembros:
+            nuevo = canon
+            if not nuevo:
+                for k in orden:
+                    c = forma[k]
+                    if _rotulo_fiel(c, tit[i], txt[i], brand, aliases) \
+                            and _rotulo_bien_formado(c, [tit[i]]):
+                        nuevo = c
+                        break
+            if nuevo and nz(nuevo) != nz(finales[i]):
+                ajustes[i] = nuevo
+                finales[i] = nuevo
+                cambios_sub += 1
+
+    # --- tono: un subtema final (o un hecho) = un tono ---
+    gids = sorted({mapa[i] for i in filas})
+    pg = {g: g for g in gids}
+
+    def find_g(x):
+        while pg[x] != x:
+            pg[x] = pg[pg[x]]
+            x = pg[x]
+        return x
+
+    primero_g = {}
+    for i in filas:
+        gid = mapa[i]
+        claves = [('s', nz(finales[i]))] if finales[i] else []
+        hecho = (etiquetas.get(gid) or {}).get('hecho')
+        if hecho:
+            claves.append(('h', hecho))
+        for c in claves:
+            if c in primero_g:
+                ra, rb = find_g(gid), find_g(primero_g[c])
+                if ra != rb:
+                    pg[max(ra, rb)] = min(ra, rb)
+            else:
+                primero_g[c] = gid
+    notas = Counter(mapa[i] for i in filas)
+    comp = defaultdict(list)
+    for g in gids:
+        comp[find_g(g)].append(g)
+    cambios_tono = 0
+    for miembros in comp.values():
+        tonos = {g: (etiquetas.get(g) or {}).get('tono') for g in miembros}
+        votos = Counter()
+        for g, t in tonos.items():
+            if t in TONOS:
+                votos[t] += notas[g]
+        if len(votos) <= 1:
+            continue
+        top = votos.most_common()
+        empatados = [t for t, n in top if n == top[0][1]]
+        if len(empatados) == 1:
+            ganador = empatados[0]
+        else:
+            ganador = 'Neutro'
+        for g in miembros:
+            e = etiquetas.get(g)
+            if e is not None and e.get('tono') != ganador:
+                e['tono'] = ganador
+                cambios_tono += 1
+    return ajustes, cambios_sub, cambios_tono
+
+
 def elegir_cubos(cfg: dict, pendientes: Sequence[dict], tax: dict,
                  permitir_nuevos: bool = True) -> Dict[int, str]:
     """El modelo elige dentro de la lista cerrada (o propone un cubo nuevo especifico)."""
@@ -6247,7 +6651,8 @@ def volcar_analisis_en_filas(rows: List[dict], mapa: Dict[int, int],
                              etiquetas: Dict[int, dict], temas: Dict[int, str],
                              preservar_tema: bool = False,
                              incluir_tema: bool = True,
-                             ajustes_subtema: Optional[Dict[int, str]] = None) -> List[dict]:
+                             ajustes_subtema: Optional[Dict[int, str]] = None,
+                             km: Optional[dict] = None) -> List[dict]:
     """Propaga etiqueta de GRUPO. No reasigna tema por fila.
 
     `ajustes_subtema` (v4.35): {índice_fila: subtema} de la guarda de
@@ -6264,6 +6669,9 @@ def volcar_analisis_en_filas(rows: List[dict], mapa: Dict[int, int],
     mismo grupo no pueden quedar con distinto Tema_IA por usar cada una su
     propio titular.
     """
+    # v1.29: `km` faltaba como parámetro y el respaldo de subtema vacío
+    # fallaba con NameError.
+    km = km or {}
     # --- tema final por grupo (una sola vez por grupo) ---
     tema_por_grupo: Dict[int, str] = {}
     if incluir_tema:
@@ -6462,7 +6870,12 @@ def enrich_rows_with_ai(
     # canonización determinista no ve («Apertura…» vs «Inauguración…»).
     # Corre antes de las guardas de tono para que el voto por subtema use
     # los subtemas ya unificados.
-    extra_llm = unificar_subtemas_llm(cfg, grupos, etiquetas, uso=uso)
+    # v1.29: consolidación por hecho con la noticia a la vista (titular +
+    # entrada), validada en código por fidelidad. Si el modelo no responde,
+    # cae a la unificación anterior por lista de subtemas.
+    extra_llm = consolidar_hechos_llm(cfg, grupos, etiquetas, uso=uso, workers=workers)
+    if extra_llm is None:
+        extra_llm = unificar_subtemas_llm(cfg, grupos, etiquetas, uso=uso)
     # v4.18: repara etiquetas cruzadas del modelo (el subtema de un grupo
     # describe la noticia de otro). Corre antes del voto de tono por subtema.
     ajenos = reparar_subtemas_ajenos(grupos, etiquetas)
@@ -6672,11 +7085,25 @@ def enrich_rows_with_ai(
     if _nuevos_uni:
         _ULTIMO_RESUMEN['subtemas_unificados_finales'] = _nuevos_uni
 
+    # v1.29 (2026-11-02): garantía FINAL de coherencia por hecho. Último
+    # pase antes de volcar: misma noticia (mismo grupo, mismo hecho
+    # consolidado o mismo titular) => mismo subtema, si hay un rótulo fiel
+    # a todas; y mismo subtema final => mismo tono. Corre después de todas
+    # las reglas de tono y de todos los pases por fila, así que nada
+    # posterior vuelve a separar subtema ni tono.
+    ajustes_fieles, _coh_sub, _coh_tono = garantizar_coherencia_hecho(
+        rows, mapa, etiquetas, ajustes_fieles, km, brand=brand, aliases=aliases)
+    if _coh_sub:
+        _ULTIMO_RESUMEN['coherencia_subtema_por_hecho'] = _coh_sub
+    if _coh_tono:
+        _ULTIMO_RESUMEN['coherencia_tono_por_subtema'] = _coh_tono
+
     volcar_analisis_en_filas(
         rows, mapa, etiquetas, temas,
         preservar_tema=(theme_model is not None) and incluir_tema,
         incluir_tema=incluir_tema,
         ajustes_subtema=ajustes_fieles,
+        km=km,
     )
 
     temas_lote: List[str] = []
