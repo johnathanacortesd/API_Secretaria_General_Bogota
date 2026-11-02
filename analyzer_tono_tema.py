@@ -2139,7 +2139,10 @@ def _tono_con_jev(cfg: dict, grupo: dict) -> Optional[str]:
                 'instructions': (
                     'Clasifica exclusivamente el tono expresado sobre la marca, '
                     'sus alias o sus voceros. No clasifiques el tono general de la '
-                    'noticia ni un problema que afecte a terceros.'
+                    'noticia ni un problema que afecte a terceros. Si la marca o '
+                    'alias mencionado corresponde a una entidad homónima de otro '
+                    'país (el hecho ocurre en otro país y no hay vocero ni '
+                    'referencia al cliente), clasifica Neutro: no es la marca objetivo.'
                 ),
                 'criteria': {
                     'Positivo': 'La marca o vocero realiza, recibe o expresa una acción favorable, beneficio, apoyo, alianza, reconocimiento o logro.',
@@ -3459,6 +3462,140 @@ def aplicar_fidelidad_final_subtema(rows, mapa, etiquetas, ajustes_subtema,
             nuevo = _subtema_especifico(tit, [txt])
             if nz(nuevo) != nz(sub):
                 ajustes[i] = nuevo
+    return ajustes
+
+
+def unificar_rotulos_finales(rows, mapa, etiquetas, ajustes_subtema, km,
+                             brand='', aliases=(), voceros=()):
+    """Unificación FINAL de rótulos (v1.24/v1.28, 2026-11-02).
+
+    Cierra la fuga que dejaba variantes del mismo hecho en el Excel:
+    los pases por fila (guarda de fidelidad, puerta anti-copia,
+    fidelidad final) escriben ajustes que la canonización por grupo
+    nunca vuelve a unificar, porque solo ve etiquetas. Corre después
+    de la fidelidad final y antes de volcar, y solo une filas de
+    grupos DISTINTOS cuando sus rótulos finales son el mismo hecho:
+
+      (a) `_subtemas_mismo_hecho` (variantes de nombre: 'Fallecimiento
+          de Navarro Wolff' ≡ 'Fallecimiento de Antonio Navarro Wolff');
+      (b) mismo evento + mismo lugar en el rótulo (≥2 tokens de
+          contenido compartidos) MÁS un ancla distintiva compartida en
+          los titulares (p. ej. 'Villa Nueva' para los dos rótulos de
+          desplazamiento en Nuquí).
+
+    El canon es el más frecuente; en empate, el de más tokens de
+    contenido (el nombre completo gana). Solo escribe ajustes para
+    las filas que cambian; nunca fusiona ángulos distintos (muerte vs
+    reacciones vs trayectoria no comparten hecho ni ancla) y nunca
+    toca filas duplicadas. Devuelve el dict de ajustes actualizado.
+    """
+    ajustes = dict(ajustes_subtema or {})
+    finales = {}
+    for i, row in enumerate(rows):
+        if row.get('is_duplicate'):
+            continue
+        lab = (ajustes.get(i) or '').strip()
+        if not lab:
+            gid = mapa.get(i)
+            lab = str((etiquetas.get(gid) or {}).get('sub_tema') or '').strip() \
+                if gid is not None else ''
+        if lab:
+            finales[i] = lab
+    if len(set(nz(v) for v in finales.values())) <= 1:
+        return ajustes
+    toks_marca = _tokens_marca(brand, aliases, voceros)
+    disc = {i: _contenido_discriminante(lab) for i, lab in finales.items()}
+
+    def _anclas_titulo(tit):
+        toks = words(nz(tit or ''))
+        big, uni = set(), set()
+        for a, b in zip(toks, toks[1:]):
+            if (len(a) >= 3 and len(b) >= 3 and a.isalpha() and b.isalpha()
+                    and a not in CONECT and a not in FILLER and a not in MARCO
+                    and b not in CONECT and b not in FILLER and b not in MARCO
+                    and a not in GENERIC_TITULO and b not in GENERIC_TITULO
+                    and a not in toks_marca and b not in toks_marca):
+                big.add((a, b))
+        for w in toks:
+            if (len(w) >= 5 and w.isalpha() and w not in CONECT
+                    and w not in FILLER and w not in MARCO
+                    and w not in GENERIC_TITULO and w not in toks_marca):
+                uni.add(w)
+        return big, uni
+
+    anclas = {}
+    for i in finales:
+        try:
+            tit = _titulo_fila(rows[i], km)
+        except Exception:
+            tit = ''
+        anclas[i] = _anclas_titulo(tit)
+
+    por_token = {}
+    for i, toks in disc.items():
+        for t in toks:
+            por_token.setdefault(t, []).append(i)
+    parejas = set()
+    for lst in por_token.values():
+        for a_pos in range(len(lst)):
+            for b_pos in range(a_pos + 1, len(lst)):
+                x, y = lst[a_pos], lst[b_pos]
+                parejas.add((x, y) if x < y else (y, x))
+
+    par = {i: i for i in finales}
+
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    def uni(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            par[max(ra, rb)] = min(ra, rb)
+
+    for i, j in sorted(parejas):
+        if find(i) == find(j):
+            continue
+        gi, gj = mapa.get(i), mapa.get(j)
+        if gi is not None and gi == gj:
+            continue
+        li, lj = finales[i], finales[j]
+        if _subtemas_mismo_hecho(li, lj):
+            uni(i, j)
+            continue
+        ca, cb = disc[i], disc[j]
+        if len(ca & cb) < 2:
+            continue
+        compartidos = ca | cb
+        big_i, uni_i = anclas[i]
+        big_j, uni_j = anclas[j]
+        ancla_big = any(a not in compartidos and b not in compartidos
+                        for a, b in (big_i & big_j))
+        ancla_uni = any(w not in compartidos for w in (uni_i & uni_j))
+        if ancla_big or ancla_uni:
+            uni(i, j)
+
+    buckets = {}
+    for i in finales:
+        buckets.setdefault(find(i), []).append(i)
+    for miembros in buckets.values():
+        if len(miembros) < 2:
+            continue
+        conteo = Counter(nz(finales[k]) for k in miembros)
+        if len(conteo) <= 1:
+            continue
+
+        def _clave(s):
+            return (conteo[s], len(_contenido_discriminante(s)))
+
+        canon_norm = max(conteo, key=_clave)
+        canon_orig = Counter(finales[k] for k in miembros
+                             if nz(finales[k]) == canon_norm).most_common(1)[0][0]
+        for k in miembros:
+            if nz(finales[k]) != canon_norm:
+                ajustes[k] = canon_orig
     return ajustes
 
 
@@ -6502,6 +6639,14 @@ def enrich_rows_with_ai(
     if _distrito:
         _ULTIMO_RESUMEN['tono_distrito'] = _distrito
 
+    # v1.24/v1.28 (2026-11-02): homónimo extranjero (ver
+    # aplicar_regla_homonimo_extranjero). Corre después de Jev y junto
+    # al decreto/distrito: una Defensoría de otro país no es el cliente.
+    _bajados_homonimo = aplicar_regla_homonimo_extranjero(
+        grupos, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
+    if _bajados_homonimo:
+        _ULTIMO_RESUMEN['tono_homonimo_extranjero'] = _bajados_homonimo
+
     # v1.13/v1.9 (2026-10-31): fidelidad FINAL por fila (ver
     # aplicar_fidelidad_final_subtema). Es el último pase que toca el
     # subtema antes de volcar: nada posterior puede volver a imponer un
@@ -6513,6 +6658,19 @@ def enrich_rows_with_ai(
                          if _previos_fieles.get(_i) != _v)
     if _nuevos_fieles:
         _ULTIMO_RESUMEN['subtemas_fidelidad_final_corregidos'] = _nuevos_fieles
+
+    # v1.24/v1.28 (2026-11-02): unificación FINAL de rótulos (ver
+    # unificar_rotulos_finales). Corre después de la fidelidad final y
+    # antes de volcar: cierra variantes del mismo hecho que los pases
+    # por fila dejaron (Navarro con/sin nombre, Nuquí comunidad/indígenas).
+    _previos_uni = dict(ajustes_fieles)
+    ajustes_fieles = unificar_rotulos_finales(
+        rows, mapa, etiquetas, ajustes_fieles, km, brand=brand, aliases=aliases,
+        voceros=cfg.get('voceros') or [])
+    _nuevos_uni = sum(1 for _i, _v in ajustes_fieles.items()
+                      if _previos_uni.get(_i) != _v)
+    if _nuevos_uni:
+        _ULTIMO_RESUMEN['subtemas_unificados_finales'] = _nuevos_uni
 
     volcar_analisis_en_filas(
         rows, mapa, etiquetas, temas,
@@ -7471,6 +7629,82 @@ def aplicar_regla_distrito(grupos, etiquetas, brand, aliases, voceros=()):
         e['tono'] = 'Positivo'
         corregidos.append(g.get('grupo'))
     return corregidos
+
+# Países (forma nz) cuyo nombre en el titular sitúa el hecho fuera de
+# Colombia. Solo se usa para la guarda de homónimo extranjero: una
+# Defensoría/Alcaldía de otro país no es el cliente.
+_PAISES_EXTRANJEROS = {
+    'mexico', 'guatemala', 'belice', 'honduras', 'el salvador', 'nicaragua',
+    'costa rica', 'panama', 'cuba', 'republica dominicana', 'puerto rico',
+    'venezuela', 'ecuador', 'peru', 'bolivia', 'brasil', 'paraguay',
+    'chile', 'argentina', 'uruguay', 'espana', 'estados unidos', 'canada',
+}
+
+
+def _contiene_frase(toks, frase):
+    """True si la frase (1+ tokens nz) aparece consecutiva en toks."""
+    partes = (frase or '').split()
+    n = len(partes)
+    if n == 0:
+        return False
+    if n == 1:
+        return partes[0] in toks
+    return any(toks[k:k + n] == partes for k in range(len(toks) - n + 1))
+
+
+def aplicar_regla_homonimo_extranjero(grupos, etiquetas, brand, aliases, voceros=()):
+    """Homónimo extranjero = Neutro (regla general, 2026-11-02).
+
+    Si el titular sitúa el hecho en otro país, la nota menciona la
+    marca de forma genérica y no hay ningún ancla del cliente (vocero,
+    Colombia, alias multi-palabra con lugar), la mención es la entidad
+    homónima de ese país, no el cliente: el tono hacia el cliente es
+    Neutro, ni Positivo ni Negativo. Caso real: 'Ecuador impone toque
+    de queda...' con 'monitoreo de la Defensoría del Pueblo' en el
+    contexto, sin Iris Marín ni Colombia — el Positivo no le pertenece
+    a la Defensoría colombiana. Corre después de la auditoría Jev
+    (que SOBRESCRIBE el tono) para corregir sus misses; no toca el
+    subtema. Ante la duda no dispara: basta un ancla del cliente
+    (vocero, 'Colombia', alias con lugar) para dejar el tono intacto.
+    """
+    cambios = 0
+    marca_toks = set()
+    for x in [brand] + list(aliases or []):
+        marca_toks.update(w for w in words(nz(x or '')) if len(w) >= 3)
+    vocero_toks = set()
+    for v in (voceros or []):
+        vocero_toks.update(w for w in words(nz(v or '')) if len(w) >= 4)
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or (e.get('tono') or '') not in ('Positivo', 'Negativo'):
+            continue
+        tit = str(g.get('titulo') or '')
+        txt = ' '.join(str(g.get(k) or '') for k in ('texto', 'contexto'))
+        toks_tit = words(nz(tit))
+        if not any(_contiene_frase(toks_tit, p) for p in _PAISES_EXTRANJEROS):
+            continue
+        toks = words(nz(tit)) + words(nz(txt))
+        toks_set = set(toks)
+        if not (marca_toks & toks_set):
+            continue
+        if toks_set & {'colombia', 'colombiano', 'colombiana',
+                       'colombianos', 'colombianas', 'bogota'}:
+            continue
+        if vocero_toks & toks_set:
+            continue
+        # Solo desambigua un alias multi-palabra si trae lugar propio
+        # ('de Colombia', 'de Bogotá'): el nombre genérico de la marca
+        # ('Defensoría del Pueblo') es justo el homónimo y nunca ancla.
+        if any(len(nz(a or '').split()) >= 2
+               and (set(nz(a or '').split()) & {'colombia', 'colombiano',
+                                                'colombiana', 'bogota'})
+               and _contiene_frase(toks, nz(a or ''))
+               for a in list(aliases or []) + ([brand] if brand else [])):
+            continue
+        e['tono'] = 'Neutro'
+        cambios += 1
+    return cambios
+
 
 def aplicar_regla_decreto(grupos, etiquetas):
     """Acto normativo sin crítica = Neutro (regla general, 2026-10-31).
