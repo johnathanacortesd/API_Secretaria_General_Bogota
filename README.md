@@ -526,3 +526,22 @@ GÉNERO) se midió el acierto real y se calibraron las reglas:
   placa", "plan retorno") toman el subtema más frecuente del bloque, si
   corresponde a cada nota (titular + Contexto analizado + inicio del
   cuerpo).
+
+## Novedades v1.34 (2026-11-02; Secretaría y Defensoría)
+
+Forma del subtema (pedido del usuario: casos reales "Días dejan cinco muertos
+en el suroccidente" y "Ellos, una bebé de dos meses"):
+
+- Un subtema **jamás** lleva comas ni puntos (salvo comas de un nombre
+  propio de programa, como "Bogotá, mi Ciudad, mi Casa", y cifras como
+  "$42,7"), **jamás** empieza con pronombre ("Ellos", "Esto", "Su"…) y
+  **jamás** es una oración "sujeto + verbo" ("Días dejan…", "Ministerio
+  anunció…").
+- Causa: el respaldo que arma un subtema con el titular o una oración del
+  cuerpo se usaba en pases que corren después de la puerta anti-copia. Ahora:
+  el validador marca estos problemas (la puerta anti-copia los manda a
+  reformular), el respaldo no devuelve rótulos así (los repara sin inventar:
+  "Cinco muertos en el suroccidente", "Bebé de dos meses") y una revisión
+  final obligatoria antes de exportar prefiere el subtema del grupo.
+- La guarda de fidelidad ya no cambia un subtema con relación con la nota por
+  un respaldo peor (copia del titular o con verbo), como en Defensoría v1.28.
