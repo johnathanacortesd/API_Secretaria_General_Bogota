@@ -16,10 +16,9 @@ from pipeline import (process_dossier, leer_columnas_xlsx, sugerir_columna,
                       renombrar_columnas_xlsx, construir_ai_config_custom,
                       LimiteFilasError, ErrorSheetsAnalizadas,
                       cargar_ids_analizados_desde_sheets)
-from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.31"
+APP_VERSION = "v1.32"
 
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
@@ -1229,21 +1228,6 @@ def main():
         finally:
             st.session_state["procesando"] = False
         st.rerun()
-
-    # Resumen para informe (v1.0, nuevo en estos repos): resubir el
-    # xlsx corregido y generar el texto de dos párrafos. Se muestra
-    # siempre fuera del procesamiento, también en la vista de
-    # resultados, y usa el perfil fijo de este cliente.
-    if not _procesando:
-        try:
-            _perfil_resumen = cargar_perfil("secretaria_general_de_la_alcaldia_de_bogota")
-        except Exception:
-            _perfil_resumen = {"nombre": "Secretaría General de la Alcaldía de Bogotá", "aliases": []}
-        st.divider()
-        render_resumen_tab(
-            _perfil_resumen.get("nombre") or "Secretaría General de la Alcaldía de Bogotá",
-            _perfil_resumen.get("aliases") or [],
-        )
 
     # El pie solo se muestra fuera del procesamiento.
     if not _procesando:

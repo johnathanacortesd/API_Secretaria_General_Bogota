@@ -452,3 +452,9 @@ parecidas; las notas específicas conservan su propio subtema.
   - Empates de tono dentro de la misma noticia: se deciden con la
     evidencia del texto (gestión de la marca => Positivo; crítica
     dirigida => Negativo) en vez de ir siempre a Neutro.
+
+## Novedades v1.32 (2026-11-02; solo Secretaría)
+
+- Se quita la sección "📝 Resumen para informe" (pedido del usuario) y su
+  módulo `resumen_informe.py`. Las secciones anteriores de este README que
+  la describen quedan como historial.
