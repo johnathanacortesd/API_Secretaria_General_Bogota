@@ -545,3 +545,33 @@ en el suroccidente" y "Ellos, una bebé de dos meses"):
   final obligatoria antes de exportar prefiere el subtema del grupo.
 - La guarda de fidelidad ya no cambia un subtema con relación con la nota por
   un respaldo peor (copia del titular o con verbo), como en Defensoría v1.28.
+
+## Novedades v1.35 (2026-11-02; port de Grill v4.70)
+
+Tema y subtema coherentes con el TEXTO de la noticia (pedido del usuario:
+noticias iguales o similares no quedaban con el mismo subtema, y se ponían
+subtemas a noticias que no tenían que ver, "agrupando por agrupar").
+
+- **Similitud por texto** (`coherencia_texto.py`, compartido con Grill):
+  TF-IDF sobre Título + Contexto analizado + CuerpoEs, sin tildes, sin
+  palabras vacías y sin los tokens de marca/alias/voceros. Calibración: la
+  misma noticia reescrita ≈ 0.55-0.70; hechos distintos del mismo asunto ≈
+  0.15-0.20; notas ajenas ≈ 0.00-0.05.
+- **Agrupación**: las uniones solo por parecido del titular se vetan si los
+  dos CuerpoEs (250+ caracteres) no se parecen (coseno < 0.20). Aplica
+  también con `agrupacion_estricta`.
+- **Coherencia de subtemas** (`coherencia_subtemas_por_texto`), tras las
+  unificaciones/consolidación y antes de los subtemas fijos, del tono y del
+  tema: separa las notas sin relación textual con el subtema que recibieron
+  (recuperan su subtema propio si es fiel o reciben uno nuevo) y une la
+  misma noticia (similitud ≥ 0.45) bajo el rótulo de la mayoría si es fiel
+  a todas. La puerta anti-copia no puede devolver un subtema rechazado.
+- **Tema**: las familias de subtemas se separan si sus Contexto analizado no
+  tienen relación y se unen si son muy parecidos (≥ 0.30).
+- **Contexto analizado** desde el CuerpoEs cuando trae marca/alias/vocero;
+  voceros también por nombre + primer apellido (expansión automática).
+- **Columna texto**: quita el Título aunque difiera en forma (comillas,
+  espacios, entidades); conserva el mínimo de 15 palabras de v1.30.
+- `Link Ext` ya salía como texto plano desde v1.17; sin cambios.
+- Rótulo de emergencia: nominaliza el verbo del titular («Secretaría General
+  lanza ventanilla…» → «Lanzamiento de ventanilla…»).

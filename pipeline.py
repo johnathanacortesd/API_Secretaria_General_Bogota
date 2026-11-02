@@ -22,6 +22,7 @@ from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
 from unidecode import unidecode
 
 from analyzer_tono_tema import enrich_rows_with_ai, ultimo_resumen, aplicar_prominencia, _quitar_nombre_la_opinion
+from coherencia_texto import texto_sin_titulo
 from pkl_classifier import (
     apply_pkl_classifiers,
     fill_classification_context,
@@ -1573,15 +1574,22 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
             # Sin "Contexto analizado" (modo sin IA) queda vacía.
             if h == "texto":
                 if "Título" in cols and CONTEXTO_ANALIZADO_COL in cols:
+                    # v4.74: el título se quita aunque difiera en forma
+                    # (comillas, espacios, entidades, limpieza del título
+                    # de salida); antes solo se quitaba la copia exacta y
+                    # «texto» podía salir con el título adelante.
                     ctx_v = row.get(CONTEXTO_ANALIZADO_COL) or ""
                     tit_v = row.get("Título") or ""
-                    base = str(ctx_v).replace(str(tit_v), "") if str(tit_v) else str(ctx_v)
+                    base = texto_sin_titulo(str(ctx_v), str(tit_v))
                     # v1.30: más de 15 palabras, completando con oraciones
                     # LITERALES del Resumen - Aclaracion (sin inventar).
-                    base = texto_con_minimo(" ".join(base.split()),
+                    base = texto_con_minimo(base,
                                             row.get("Resumen - Aclaracion") or "",
                                             str(tit_v or ""))
-                    ws.write(excel_row, cidx, base)
+                    if base:
+                        ws.write_string(excel_row, cidx, base)
+                    else:
+                        ws.write_blank(excel_row, cidx, None)
                 else:
                     ws.write_blank(excel_row, cidx, None)
                 continue
