@@ -19,7 +19,7 @@ from pipeline import (process_dossier, leer_columnas_xlsx, sugerir_columna,
 from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.29"
+APP_VERSION = "v1.30"
 
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
@@ -1058,7 +1058,10 @@ def main():
                             tone_pkl_bytes=None,
                             theme_pkl_bytes=None,
                             model=modelo_sel_c,
-                            criterio_texto=criterio_custom_c,
+                            # v1.30: si no se escribe un criterio aquí, se usa
+                            # el del perfil cargado (como guía y TIPO/GÉNERO).
+                            criterio_texto=(criterio_custom_c or "").strip()
+                            or (st.session_state.get("criterio_custom_input") or ""),
                             guia_subtema=st.session_state.get("_perfil_guia_subtema") or "",
                             subtemas_fijos=st.session_state.get("_perfil_subtemas_fijos") or [],
                             clasificar_tipo_genero=bool(st.session_state.get("_perfil_clasificar_tipo_genero")),
