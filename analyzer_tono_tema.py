@@ -872,6 +872,18 @@ inicia termina sigue siguen mantiene mantienen trabaja trabajan llevan deja deja
 recibe recibio recibieron pidieron exigieron superviso entrego anuncio advirtio aseguro confirmo
 denuncio critico lidero presento aprobo celebro conmemoro designo nombro""".split())
 RE_VERBO = re.compile(r'(aron|ieron|ió|eó|arán|erán|irán|aba|aban|amos|imos)$')
+# Verbos inequívocos que encabezan un rótulo aunque les siga artículo o
+# preposición («Tuvo un papel…», «Provoca un amplio duelo…»): la exención
+# nexo2 de validar/_empieza_con_verbo existe para homógrafos verbo/sustantivo
+# («Entrega de premios»), no para estas formas, que jamás son sustantivo.
+# Se excluyen a propósito los ambiguos: 'vino' (vino tinto) y 'genero'
+# (género), y 'marca'/'causa' (sustantivos frecuentes en rótulos).
+_VERBOS_IRREGULARES = {
+    'tuvo', 'fue', 'dio', 'vio', 'hizo', 'puso', 'dijo', 'supo', 'quiso',
+    'estuvo', 'pudo', 'anduvo', 'trajo', 'hubo', 'fueron', 'dieron',
+    'dijeron', 'trajeron', 'provoca', 'provocan', 'provoco', 'genera',
+    'generan',
+}
 ROTULO_GEN = {
     'gestion gubernamental', 'gestion institucional', 'gestion departamental', 'actividad institucional',
     'actividad gubernamental', 'noticias de la entidad', 'noticias generales', 'temas generales',
@@ -979,8 +991,10 @@ def validar(sub_tema, tono, fuentes, min_pal=MIN_PAL, max_pal=MAX_PAL,
         p.append('termina_preposicion')
     prim = nz(w[0])
     nexo2 = len(w) > 1 and nz(w[1]) in PREP_FIN
-    if not nexo2 and (prim in VERBOS1 or (len(prim) > 4 and RE_VERBO.search(prim))):
+    if prim in _VERBOS_IRREGULARES or (not nexo2 and (prim in VERBOS1 or (len(prim) > 4 and RE_VERBO.search(prim)))):
         p.append('verbo_inicial(%s)' % prim)
+    if prim in _PREP_INICIO_ETIQUETA:
+        p.append('preposicion_inicial')
     if nz(sub_tema) in ROTULO_GEN:
         p.append('rotulo_generico')
     # v4.63: una llamada o una lista de nombres no es un subtema, aunque
@@ -2944,6 +2958,15 @@ _PREP_INICIAL = {
     'para', 'por', 'de', 'del', 'en', 'y', 'e', 'o', 'con', 'sin', 'sobre',
     'entre', 'hacia', 'desde', 'hasta', 'que',
 }
+# Preposiciones y artículos que nunca pueden abrir un SUBTEMA: un rótulo
+# nominal no empieza con circunstancia («Tras la partida…») ni con artículo
+# tras recortar («…tuvo un papel…» → «un papel…»). Incluye _PREP_INICIAL
+# más las que faltaban ahí (tras, ante, bajo, durante, según, contra, a, al);
+# 'segun' va sin tilde porque la comparación usa nz().
+_PREP_INICIO_ETIQUETA = _PREP_INICIAL | {
+    'tras', 'ante', 'bajo', 'durante', 'segun', 'contra', 'a', 'al',
+}
+_ART_INICIAL = {'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas'}
 
 
 def _empieza_con_verbo(pals) -> bool:
@@ -2952,8 +2975,9 @@ def _empieza_con_verbo(pals) -> bool:
         return False
     prim = nz(pals[0])
     nexo2 = len(pals) > 1 and nz(pals[1]) in PREP_FIN
-    return bool(not nexo2 and (prim in VERBOS1 or
-                               (len(prim) > 4 and RE_VERBO.search(prim))))
+    return bool(prim in _VERBOS_IRREGULARES or
+                (not nexo2 and (prim in VERBOS1 or
+                                (len(prim) > 4 and RE_VERBO.search(prim)))))
 
 
 def _es_frase_destacada(ultimo: str, primero: str) -> bool:
@@ -3027,11 +3051,16 @@ def _subtema_desde_titulo(titulo: str) -> str:
         # Titular largo sin dos puntos: el asunto distintivo suele ir al
         # final («…el VIII Congreso Internacional de … Psicológica»).
         pals = pals[-7:]
-        while len(pals) > 3 and (nz(pals[0]) in _PREP_INICIAL
-                                 or nz(pals[0]) in _VERBO_INFO_SING
-                                 or _empieza_con_verbo(pals)):
-            pals = pals[1:]
-        t = ' '.join(pals)
+    # Un rótulo nominal nunca empieza con preposición, artículo ni verbo:
+    # tras recortar (o en titulares cortos) se quitan los encabezados
+    # funcionales («Tuvo un papel…» → «Papel…»; «Tras la partida…» →
+    # «Partida…»). Vale para cualquier longitud, no solo tras recortar.
+    while len(pals) > 1 and (nz(pals[0]) in _PREP_INICIO_ETIQUETA
+                             or nz(pals[0]) in _ART_INICIAL
+                             or nz(pals[0]) in _VERBO_INFO_SING
+                             or _empieza_con_verbo(pals)):
+        pals = pals[1:]
+    t = ' '.join(pals)
     if t and t == t.upper() and any(c.isalpha() for c in t):
         # Conserva siglas (IA, PAE); nexos y resto a frase normal: primera
         # palabra con mayúscula inicial, las demás en minúsculas.
@@ -5953,7 +5982,11 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
             continue
         _pr = validar(_s, _e.get('tono') or 'Neutro',
                        [_g.get('titulo') or ''])
-        _mal = [x for x in ('copia_titular', 'subtema_sin_hecho') if x in _pr]
+        # La puerta también ataja rótulos con forma inválida (verbo o
+        # preposición inicial): si llegan aquí, van a la misma reformulación.
+        _base = [x.split('(')[0] for x in _pr]
+        _mal = [x for x in ('copia_titular', 'subtema_sin_hecho',
+                             'verbo_inicial', 'preposicion_inicial') if x in _base]
         if _mal:
             # v4.63: una llamada o lista de nombres tampoco se exporta,
             # aunque no copie el titular: va a la misma reformulación.
@@ -5967,7 +6000,9 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
         _tit = _titulo_fila(rows[_i], km) if _i < len(rows) else ''
         _txt = _texto_fila(rows[_i], km) if _i < len(rows) else ''
         _prf = validar(_s, 'Neutro', [_tit])
-        _malf = [x for x in ('copia_titular', 'subtema_sin_hecho') if x in _prf]
+        _basef = [x.split('(')[0] for x in _prf]
+        _malf = [x for x in ('copia_titular', 'subtema_sin_hecho',
+                              'verbo_inicial', 'preposicion_inicial') if x in _basef]
         if _malf:
             fallos_fila.append({'grupo': 900000 + _i, 'titulo': _tit,
                                 'texto': _txt, 'sub_tema': _s,
@@ -6041,8 +6076,11 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
         _gid = _f['grupo']
         _nuevo = reparados.get(_gid)
         _prn = validar(_nuevo, 'Neutro', [_f['titulo']]) if _nuevo else []
-        if _nuevo and 'copia_titular' not in _prn \
-                and 'subtema_sin_hecho' not in _prn:
+        _base_n = [x.split('(')[0] for x in _prn]
+        if _nuevo and 'copia_titular' not in _base_n \
+                and 'subtema_sin_hecho' not in _base_n \
+                and 'verbo_inicial' not in _base_n \
+                and 'preposicion_inicial' not in _base_n:
             etiquetas[_gid]['sub_tema'] = _nuevo
             reparados_ok += 1
         else:
@@ -6053,8 +6091,11 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
         _i = _f['_fila']
         _nuevo = reparados.get(_f['grupo'])
         _prn = validar(_nuevo, 'Neutro', [_f['titulo']]) if _nuevo else []
-        if _nuevo and 'copia_titular' not in _prn \
-                and 'subtema_sin_hecho' not in _prn:
+        _base_n = [x.split('(')[0] for x in _prn]
+        if _nuevo and 'copia_titular' not in _base_n \
+                and 'subtema_sin_hecho' not in _base_n \
+                and 'verbo_inicial' not in _base_n \
+                and 'preposicion_inicial' not in _base_n:
             ajustes[_i] = _nuevo
             reparados_ok += 1
         else:
