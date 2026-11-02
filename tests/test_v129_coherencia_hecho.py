@@ -75,7 +75,8 @@ class TestConsolidarHechosLLM(unittest.TestCase):
         with patch.object(az, 'llamar_llm', return_value=r):
             az.consolidar_hechos_llm(CFG, grupos, et, uso={})
         self.assertEqual(et[2]['sub_tema'], 'Críticas por aumento de hurtos')
-        self.assertNotIn('hecho', et[2])
+        # v1.30: no agrupados => cada uno es su propio hecho.
+        self.assertNotEqual(et[1].get('hecho'), et[2].get('hecho'))
 
     def test_corrige_subtema_ajeno_de_un_grupo(self):
         grupos = [_grupo(1, *HURTOS)]
@@ -201,7 +202,7 @@ class TestEjemplosCoherentes(unittest.TestCase):
         ruta = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             'clientes', 'secretaria_general_de_la_alcaldia_de_bogota.json')
         with open(ruta, encoding='utf-8') as f:
-            self.assertIn('mismo hecho', json.load(f)['guia_subtema'])
+            self.assertIn('MISMO sub-tema', json.load(f)['guia_subtema'])
 
 
 if __name__ == '__main__':

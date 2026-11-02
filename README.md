@@ -383,3 +383,40 @@ subtema y mismo tono; el subtema siempre corresponde a su noticia.
   Galán / Secretaría General (hecho concreto, no la entidad; ejemplos).
 - Corrección: `volcar_analisis_en_filas` usaba `km` sin recibirlo
   (NameError en el respaldo de subtema vacío).
+
+## Novedades v1.30 (2026-11-02; solo Secretaría)
+
+Precisión de tema (Subtema_IA), tono, TIPO y columna texto, según la
+especificación del usuario.
+
+- **Tema (Subtema_IA)**: indica de qué habla la nota. Si trata de un
+  proyecto, programa u obra con nombre propio, es ese nombre ("Metro de
+  Bogotá", "Regiotram del Norte", "Línea 137"); si no, el asunto concreto.
+  El mismo tema lleva el mismo rótulo. El validador acepta nombres propios
+  de 2+ palabras aunque estén en el titular (antes "Línea 137" se
+  rechazaba por corto y por copia).
+- **Agrupación**: puede haber noticias sin agrupar. Solo se agrupan las
+  que el modelo ve como el mismo hecho y cuyo rótulo común corresponde al
+  titular y al **Contexto analizado** de cada una.
+- **Tono por hecho, no por tema**: la misma noticia lleva un solo tono,
+  pero dos noticias distintas del mismo tema (avance del metro vs.
+  críticas por sobrecostos del metro) conservan cada una el suyo.
+- **Tono enfocado en marca, alias y voceros**: criterio del perfil con
+  la definición del usuario (Positivo = destaca gestión o labor;
+  Negativo = críticas o funcionarios en corrupción; Neutro = mención
+  referencial). Corrección: las reglas que detectan "crítica dirigida a
+  la marca" ignoraban a los voceros, así que una crítica al alcalde
+  Galán o al secretario Miguel Silva bajaba de Negativo a Neutro; y
+  "cuestionan a la Alcaldía de Bogotá" no coincidía por el artículo.
+  La pestaña personalizada usa el criterio del perfil si no se escribe
+  otro.
+- **TIPO**: reglas reescritas con las definiciones del usuario
+  (Institucional = nombramientos, presupuesto, ampliación, sede…;
+  Proyectos y programas = gestión, programas, subsidios, jornadas, aunque
+  los anuncie el alcalde; Opinión de terceros; Ranking; Información
+  general). Antes, la sola intervención del vocero hacía Institucional
+  cualquier nota. La misma noticia lleva el mismo TIPO (mayoría clara).
+- **texto**: más de 15 palabras. Si el texto derivado del Contexto
+  analizado es más corto, se completa con oraciones completas y literales
+  del Resumen - Aclaracion (sin palabras que no estén ahí; sin el
+  titular). Si el resumen no alcanza, queda lo que haya.
