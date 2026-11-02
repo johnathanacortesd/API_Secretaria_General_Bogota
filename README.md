@@ -348,3 +348,38 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
   Enlace, enlace). Link Nota, Link Ext, Web Ext y Audio no cambian
   (siguen como hipervínculos).
 - Defensoría no se toca (salvo el motor compartido, que es idéntico).
+
+## Novedades v1.29 (2026-11-02; solo Secretaría)
+
+Coherencia de subtema y tono: noticias iguales o similares = mismo
+subtema y mismo tono; el subtema siempre corresponde a su noticia.
+
+- Causas encontradas: (1) los lotes de etiquetado corren en paralelo y
+  no se ven entre sí, y la unificación LLM previa solo veía la lista de
+  subtemas, sin la noticia, y no fusionaba nada si había un Negativo;
+  (2) los pases finales por fila (fidelidad, anti-copia, título-final)
+  reescribían subtemas DESPUÉS de unificar el tono, así que el mismo
+  subtema podía salir con tonos distintos; (3) los ejemplos del prompt
+  enseñaban dos subtemas distintos para la misma noticia (PAE, Canal
+  del Dique); (4) el perfil no traía guía de subtemas para Bogotá.
+- Consolidación por hecho (`consolidar_hechos_llm`): el modelo ve todas
+  las noticias (titular + entrada + subtema propuesto) y agrupa las que
+  cuentan el mismo hecho con un solo subtema. Cada agrupación se valida
+  en código: el subtema debe ser fiel (nombres propios + asunto) a CADA
+  noticia del hecho y bien formado (sin copia del titular); si no, no se
+  agrupa. Hechos distintos que solo comparten al alcalde, la ciudad o la
+  entidad no se unen. También corrige un subtema que no corresponde a su
+  noticia, solo si el actual falla el cotejo de fidelidad. Si la llamada
+  falla, se usa la unificación anterior.
+- Garantía final (`garantizar_coherencia_hecho`), último pase antes de
+  volcar: misma noticia (mismo grupo, mismo hecho consolidado o mismo
+  titular) => mismo subtema, si hay un rótulo fiel a todas; mismo
+  subtema final => mismo tono (mayoría por número de notas; empate =>
+  Neutro).
+- Prompt: regla explícita de coherencia (mismo hecho => mismo subtema y
+  tono; no agrupar por agrupar; cada subtema describe su grupo) y
+  ejemplos contradictorios corregidos.
+- Perfil: `guia_subtema` con el enfoque Alcaldía de Bogotá / alcalde
+  Galán / Secretaría General (hecho concreto, no la entidad; ejemplos).
+- Corrección: `volcar_analisis_en_filas` usaba `km` sin recibirlo
+  (NameError en el respaldo de subtema vacío).
