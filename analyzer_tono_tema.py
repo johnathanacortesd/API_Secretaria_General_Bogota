@@ -425,7 +425,7 @@ MODELO_DEFECTO = "gpt-6-luna"
 # v4.53: sello del analizador. El encabezado de la app lo muestra junto a
 # APP_VERSION; si el despliegue muestra un sello distinto (o "sin-sello"),
 # el contenedor NO corre este archivo aunque el encabezado diga otra versión.
-ANALYZER_BUILD = "v4.72-tono-solo-gestion"  # v4.62: ancla de riesgo + clases de sinonimia
+ANALYZER_BUILD = "v4.73-forma-subtema"  # v4.62: ancla de riesgo + clases de sinonimia
 # v4.53: solo cambia el sello (la lógica del analizador no se toca en esta versión;
 # el cambio es de interfaz).
 JEV_URL_DEFECTO = "https://api.typesafe.ai/v1/systemone"
@@ -968,6 +968,106 @@ def _quitar_sufijo_medio(sub_tema: str, medios: Sequence[str]) -> str:
     return s
 
 
+# v1.34 (pedido del usuario 2026-11-02): un subtema jamás lleva comas ni
+# puntos, jamás empieza con pronombre («Ellos, una bebé de dos meses») ni es
+# una oración «sujeto + verbo» («Días dejan cinco muertos en el
+# suroccidente»). Venían del respaldo que arma el rótulo con el titular o
+# una oración del cuerpo, después de la puerta anti-copia.
+_PRONOMBRE_INICIAL = {
+    'ellos', 'ellas', 'el', 'ella', 'ello', 'esto', 'eso', 'aquello', 'este', 'esta',
+    'estos', 'estas', 'ese', 'esa', 'esos', 'esas', 'aquel', 'aquella', 'aquellos',
+    'aquellas', 'quien', 'quienes', 'cual', 'cuales', 'lo', 'le', 'les', 'se', 'nos',
+    'me', 'te', 'su', 'sus', 'nuestro', 'nuestra', 'nuestros', 'nuestras', 'mi', 'mis',
+    'tu', 'tus', 'otro', 'otra', 'otros', 'otras', 'dicho', 'dicha', 'dichos', 'dichas',
+    'cuyo', 'cuya', 'cuyos', 'cuyas', 'alguien', 'nadie', 'todos', 'todas', 'ambos',
+    'ambas', 'varios', 'varias', 'algunos', 'algunas', 'muchos', 'muchas', 'tambien',
+    'ademas', 'luego', 'despues', 'entonces', 'asi', 'aqui', 'alli', 'ahi', 'ya',
+}
+_PUNTUACION_PAT = re.compile(r'(?<!\d)[.,](?!\d)|[.,]$')
+
+
+# Verbos de titular frecuentes que VERBOS1 no cubre (solo para detectar
+# «sujeto + verbo»; no cambian otras reglas).
+_VERBOS_TITULAR = set('''
+asume asumen deja dejan pide piden dice dicen llega llegan muere mueren fallece fallecen
+matan mata asesinan asesina atacan ataca capturan captura denuncia advierte alerta alertan
+revela revelan responde responden niega niegan rechaza acusa acusan anuncia pierde pierden
+gana ganan cae caen sube suben baja bajan crece crecen aumenta disminuye propone proponen
+busca buscan quiere quieren pone ponen hace hacen tiene tienen va van son es esta estan
+pasa pasan cumple cumplen enfrenta enfrentan exige exigen ordena ordenan prohibe prohiben
+suspende suspenden cierra cierran amenaza amenazan desaparece desaparecen huyen huye
+'''.split())
+
+
+def _verbo_finito(tok: str) -> bool:
+    """Forma verbal conjugada (no sustantivo ni nombre propio)."""
+    n = nz(tok)
+    conocidos = VERBOS1 | _VERBOS_IRREGULARES | _VERBOS_TITULAR
+    if not tok or (tok[:1].isupper() and n not in conocidos):
+        return False
+    return n in conocidos or (len(n) > 4 and bool(RE_VERBO.search(n)))
+
+
+def _comas_de_nombre_propio(s: str) -> bool:
+    """True si las comas son parte de un nombre propio de programa o campaña
+    («Bogotá, mi Ciudad, mi Casa»): no hay puntos y cada tramo tras una coma
+    lleva una palabra con mayúscula inicial. «Ellos, una bebé de dos meses»
+    no lo es (tramo sin mayúscula y pronombre inicial)."""
+    if re.search(r'(?<!\d)\.(?!\d)|\.$', s):
+        return False
+    tramos = [t.strip() for t in re.split(r'(?<!\d),(?!\d)', s)]
+    if len(tramos) < 2 or not tramos[0][:1].isupper():
+        return False
+    return all(any(w[:1].isupper() for w in t.split()) for t in tramos[1:])
+
+
+def _problemas_forma_subtema(sub_tema: str) -> List[str]:
+    """Problemas de forma que ningún subtema puede tener (v1.34)."""
+    s = str(sub_tema or '').strip()
+    w = s.split()
+    if not w:
+        return []
+    p = []
+    if _PUNTUACION_PAT.search(s) and not _comas_de_nombre_propio(s):
+        p.append('puntuacion')
+    if nz(w[0].strip('"\'«»“”¡¿')) in _PRONOMBRE_INICIAL:
+        p.append('inicio_pronombre')
+    if len(w) >= 3 and any(_verbo_finito(t) for t in w[1:3]):
+        p.append('clausula_verbal')
+    return p
+
+
+def _reparar_forma_subtema(sub_tema: str) -> str:
+    """Intenta convertir un rótulo con mala forma en una frase nominal, sin
+    inventar palabras: se queda con el tramo más largo entre comas o puntos,
+    quita el pronombre o artículo inicial y, si es una oración «sujeto +
+    verbo + complemento», usa el complemento («Días dejan cinco muertos en
+    el suroccidente» -> «Cinco muertos en el suroccidente»). '' si no
+    queda una frase nominal de al menos 2 palabras."""
+    s = str(sub_tema or '').strip()
+    if not s:
+        return ''
+    tramos = [t.strip(' "\'«»“”') for t in re.split(r'(?<!\d)[.,;:](?!\d)', s) if t.strip()]
+    candidatos = []
+    for tr in sorted(tramos, key=lambda x: -len(x.split())):
+        w = tr.split()
+        while w and (nz(w[0]) in _PRONOMBRE_INICIAL or nz(w[0]) in _ART_INICIAL
+                     or nz(w[0]) in _PREP_INICIO_ETIQUETA):
+            w = w[1:]
+        for k in range(1, min(4, len(w))):
+            if _verbo_finito(w[k]):
+                w = w[k + 1:]
+                while w and (nz(w[0]) in _ART_INICIAL or nz(w[0]) in _PREP_INICIO_ETIQUETA):
+                    w = w[1:]
+                break
+        if len(w) >= 2:
+            c = ' '.join(w[:7]).strip(' .,')
+            c = c[0].upper() + c[1:]
+            if not _problemas_forma_subtema(c) and nz(w[-1]) not in PREP_FIN:
+                candidatos.append(c)
+    return candidatos[0] if candidatos else ''
+
+
 def _es_nombre_de_tema(sub_tema: str) -> bool:
     """v1.30: True si el rótulo es el NOMBRE propio de un proyecto,
     programa, obra o servicio («Metro de Bogotá», «Regiotram del Norte»,
@@ -1058,6 +1158,7 @@ def validar(sub_tema, tono, fuentes, min_pal=MIN_PAL, max_pal=MAX_PAL,
     # ("Reunión de expertos en crimen").
     if _subtema_vago(sub_tema):
         p.append('subtema_vago')
+    p.extend(_problemas_forma_subtema(sub_tema))
     if tono not in TONOS:
         p.append('tono_invalido(%s)' % tono)
     fuente = ' '.join(nz(f) for f in (fuentes or []))
@@ -3171,6 +3272,9 @@ def _subtema_desde_titulo(titulo: str) -> str:
         return ''
     if t:
         t = t[0].upper() + t[1:]
+    # v1.34: sin comas, puntos, pronombre inicial ni «sujeto + verbo».
+    if t and _problemas_forma_subtema(t):
+        t = _reparar_forma_subtema(t)
     return t
 
 _PALABRAS_PREGUNTA = frozenset({
@@ -3467,6 +3571,32 @@ def _elegir_canon_fiel(valores: Sequence[str],
     return ''
 
 
+def _conservar_rotulo_original(sub: str, nuevo: str, tit: str, txt: str,
+                               brand: str = '', aliases: Sequence[str] = ()) -> bool:
+    """v1.28: True si conviene conservar el rótulo del modelo aunque la guarda
+    de fidelidad lo haya rechazado: el reemplazo derivado del titular sale
+    peor (copia del titular o empieza con verbo) y el original sí tiene
+    relación con la nota (sus nombres propios están en ella y al menos una
+    palabra distintiva aparece). Caso real: «Críticas por informe sobre
+    líderes» se cambiaba por «Cuestionan a Iris Marín por informe
+    incompleto». Los rótulos de OTRA noticia (cero palabras en común) se
+    siguen rechazando."""
+    if not sub or not nuevo:
+        return False
+    malos = {'copia_titular', 'verbo_inicial', 'preposicion_inicial', 'subtema_sin_hecho'}
+    problemas = {p.split('(')[0] for p in validar(nuevo, 'Neutro', [tit])}
+    if not (problemas & malos):
+        return False
+    if validar(sub, 'Neutro', [tit]) and {p.split('(')[0] for p in validar(sub, 'Neutro', [tit])} & malos:
+        return False
+    if not _etiqueta_fiel_a_texto(sub, tit, txt, brand, aliases):
+        return False
+    marca = _contenido_discriminante(' '.join([brand or ''] + list(aliases or [])))
+    dist = (_contenido_discriminante(sub) - GENERICO_NO_UNEN) - marca
+    hay = _contenido_discriminante(str(tit or '') + ' ' + str(txt or ''))
+    return any(any(_emparentado(d, t) for t in hay) for d in dist)
+
+
 def aplicar_guarda_fidelidad_subtema(rows: List[dict], mapa: Dict[int, int],
                                      etiquetas: Dict[int, dict], km: dict,
                                      brand: str = '',
@@ -3499,6 +3629,8 @@ def aplicar_guarda_fidelidad_subtema(rows: List[dict], mapa: Dict[int, int],
         if not _etiqueta_fiel_a_texto(sub, tit, txt, brand, aliases) \
                 or not _asunto_fiel_a_texto(sub, tit, txt, brand, aliases):
             nuevo = _subtema_especifico(tit, [txt])
+            if _conservar_rotulo_original(sub, nuevo, tit, txt, brand, aliases):
+                continue
             if nuevo and nz(nuevo) != nz(sub):
                 ajustes[i] = nuevo
     return ajustes
@@ -3547,6 +3679,8 @@ def aplicar_fidelidad_final_subtema(rows, mapa, etiquetas, ajustes_subtema,
         if not _etiqueta_fiel_a_texto(sub, tit, txt, brand, aliases) \
                 or not _asunto_fiel_a_texto(sub, tit, txt, brand, aliases):
             nuevo = _subtema_especifico(tit, [txt])
+            if _conservar_rotulo_original(sub, nuevo, tit, txt, brand, aliases):
+                continue
             if nz(nuevo) != nz(sub):
                 ajustes[i] = nuevo
     return ajustes
@@ -5313,6 +5447,51 @@ def unificar_variantes_rotulo_estricto(rows, mapa, etiquetas, ajustes_subtema, k
     return ajustes
 
 
+def sanear_subtemas_finales(rows, mapa, etiquetas, ajustes_subtema, km):
+    """v1.34: revisión FINAL de forma, justo antes de exportar. Ningún
+    Subtema_IA sale con comas o puntos, con pronombre inicial, como oración
+    «sujeto + verbo» ni como copia de su titular. Para la fila con mala
+    forma se prueba, en orden: el subtema que el modelo dio a su grupo, el
+    más frecuente del grupo, el rótulo reparado y un respaldo nuevo del
+    titular/cuerpo; gana el primero sin problemas. Si ninguno sirve, se usa
+    el rótulo reparado (sin comas ni puntos) o, en último caso, las
+    palabras distintivas. Devuelve el dict de ajustes actualizado."""
+    ajustes = dict(ajustes_subtema or {})
+    duros = {'puntuacion', 'inicio_pronombre', 'clausula_verbal', 'copia_titular',
+             'verbo_inicial', 'preposicion_inicial', 'subtema_sin_hecho', 'caracter_marcador'}
+    por_grupo = defaultdict(list)
+    for i, row in enumerate(rows):
+        if not row.get('is_duplicate') and mapa.get(i) is not None:
+            por_grupo[mapa[i]].append(i)
+
+    def _final(i):
+        return (ajustes.get(i) or '').strip() or \
+            str((etiquetas.get(mapa.get(i)) or {}).get('sub_tema') or '').strip()
+
+    def _malo(c, tit):
+        if not c:
+            return True
+        return bool({x.split('(')[0] for x in validar(c, 'Neutro', [tit])} & duros)
+    for gid, filas in por_grupo.items():
+        grupo_lab = str((etiquetas.get(gid) or {}).get('sub_tema') or '').strip()
+        frecuentes = [c for c, _n in Counter(_final(i) for i in filas).most_common()]
+        for i in filas:
+            tit = _titulo_fila(rows[i], km)
+            actual = _final(i)
+            if not _malo(actual, tit):
+                continue
+            txt = _texto_fila(rows[i], km)
+            candidatos = [grupo_lab] + frecuentes + [
+                _reparar_forma_subtema(actual), _subtema_especifico(tit, [txt])]
+            elegido = next((c for c in candidatos if c and not _malo(c, tit)), '')
+            if not elegido:
+                elegido = _reparar_forma_subtema(actual) or \
+                    ' '.join(_palabras_distintivas([txt, tit])).capitalize()
+            if elegido and nz(elegido) != nz(actual):
+                ajustes[i] = elegido
+    return ajustes
+
+
 def garantizar_coherencia_hecho(rows: List[dict], mapa: Dict[int, int],
                                 etiquetas: Dict[int, dict],
                                 ajustes_subtema: Optional[Dict[int, str]], km: dict,
@@ -7024,7 +7203,8 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
         # preposición inicial): si llegan aquí, van a la misma reformulación.
         _base = [x.split('(')[0] for x in _pr]
         _mal = [x for x in ('copia_titular', 'subtema_sin_hecho',
-                             'verbo_inicial', 'preposicion_inicial') if x in _base]
+                             'verbo_inicial', 'preposicion_inicial', 'puntuacion',
+                             'inicio_pronombre', 'clausula_verbal') if x in _base]
         if _mal:
             # v4.63: una llamada o lista de nombres tampoco se exporta,
             # aunque no copie el titular: va a la misma reformulación.
@@ -7040,7 +7220,8 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
         _prf = validar(_s, 'Neutro', [_tit])
         _basef = [x.split('(')[0] for x in _prf]
         _malf = [x for x in ('copia_titular', 'subtema_sin_hecho',
-                              'verbo_inicial', 'preposicion_inicial') if x in _basef]
+                              'verbo_inicial', 'preposicion_inicial', 'puntuacion',
+                              'inicio_pronombre', 'clausula_verbal') if x in _basef]
         if _malf:
             fallos_fila.append({'grupo': 900000 + _i, 'titulo': _tit,
                                 'texto': _txt, 'sub_tema': _s,
@@ -7666,6 +7847,10 @@ def enrich_rows_with_ai(
         _ULTIMO_RESUMEN['coherencia_subtema_por_hecho'] = _coh_sub
     if _coh_tono:
         _ULTIMO_RESUMEN['coherencia_tono_por_subtema'] = _coh_tono
+
+    # v1.34: revisión final de forma (sin comas/puntos, sin pronombre
+    # inicial, sin «sujeto + verbo», sin copia del titular).
+    ajustes_fieles = sanear_subtemas_finales(rows, mapa, etiquetas, ajustes_fieles, km)
 
     volcar_analisis_en_filas(
         rows, mapa, etiquetas, temas,
