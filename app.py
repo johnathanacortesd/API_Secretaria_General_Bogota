@@ -16,11 +16,10 @@ from pipeline import (process_dossier, leer_columnas_xlsx, sugerir_columna,
                       renombrar_columnas_xlsx, construir_ai_config_custom,
                       LimiteFilasError, ErrorSheetsAnalizadas,
                       cargar_ids_analizados_desde_sheets)
-from pkl_classifier import PklClassifierError, load_sklearn_estimator
 from resumen_informe import render_resumen_tab
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.26"
+APP_VERSION = "v1.27"
 
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
@@ -201,7 +200,6 @@ hr{border-color:var(--border)!important;margin:0.6rem 0!important}
 .step-item.is-active .dot{border-color:var(--acento);color:var(--acento);box-shadow:none;animation:livePulse 1.6s ease-out infinite}
 .live-hint{background:rgba(156,61,18,0.06);border:1px solid rgba(156,61,18,0.25);color:#7e310e;border-radius:var(--r);padding:0.55rem 0.75rem;font-size:0.78rem;line-height:1.4}
 .live-detail{font-size:0.8rem;color:var(--text2);margin-top:0.5rem;font-family:'Inter',sans-serif}
-.pkl-hint{font-size:0.78rem;color:var(--text3);margin:0.15rem 0 0.55rem;line-height:1.4}
 div[data-testid="stAlert"]{border-radius:var(--r2)!important}
 [data-testid="stAlert"]>div{background:var(--s2)!important;color:var(--text2)!important;}
 [data-testid="stCheckbox"] p,[data-testid="stToggle"] p{color:var(--text-label)!important}
@@ -647,9 +645,8 @@ def main():
                              "Gremio o sector (16 cubos)"],
                             index=0,
                             help="Por defecto los Temas se arman bottom-up en ESTE lote: se agrupan subtemas "
-                                 "afines y se nombra cada familia. Si subes un PKL de tema, se usan las clases "
-                                 "de ese modelo y no se inventan temas del lote. No hay memoria entre corridas. "
-                                 "Las listas fijas o un JSON solo se usan como nombres candidatos cuando no hay PKL.",
+                                 "afines y se nombra cada familia. No hay memoria entre corridas. "
+                                 "Las listas fijas o un JSON solo se usan como nombres candidatos.",
                         )
                         _OPCIONES_TEMA = [
                             "Solo Tono_IA + Subtema_IA (rápido)",
@@ -660,9 +657,7 @@ def main():
                             _OPCIONES_TEMA,
                             index=0,
                             help="El Tema agrupa los subtemas en cubos. La etapa de temas con IA es "
-                                 "secuencial y alarga el proceso. Si subes un PKL de tema más abajo, "
-                                 "la columna Tema_IA se genera automáticamente con las clases de tu "
-                                 "modelo (sin costo extra de IA), aunque elijas el modo rápido.",
+                                 "secuencial y alarga el proceso.",
                         )
                         prominencia_chk = st.checkbox(
                             "Agregar columna Prominencia (presencia de la marca)",
@@ -743,41 +738,6 @@ def main():
                                  "el criterio seleccionado arriba.",
                         )
 
-                    st.markdown('<div class="sec-label">3. Modelos PKL del cliente (opcional)</div>', unsafe_allow_html=True)
-                    st.markdown(
-                        '<div class="pkl-hint">Puedes subir el PKL de tono, el de tema, ambos o ninguno. '
-                        "Si un eje no tiene PKL, se mantiene el análisis actual (IA). "
-                        "El subtema nunca se reemplaza por PKL. Si subes un PKL de tema, la columna "
-                        "Tema_IA se genera automáticamente con sus clases (verbatim), aunque hayas "
-                        "elegido el modo rápido.</div>",
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown("""
-                    <div class="upload-zone">
-                        <div class="upload-zone-card">
-                            <div class="upload-zone-icon uz-pkl">◆</div>
-                            <div class="upload-zone-text">
-                                <div class="upload-zone-title">Clasificadores sklearn (joblib)</div>
-                                <div class="upload-zone-desc">Archivos .pkl con pipeline de texto (pasos tfidf + clf). No son obligatorios.</div>
-                            </div>
-                        </div>
-                    </div>""", unsafe_allow_html=True)
-                    c_tono, c_tema = st.columns(2)
-                    with c_tono:
-                        f_tono = st.file_uploader(
-                            "PKL de tono",
-                            type=["pkl"],
-                            key="pkl_tono",
-                            help="Modelo opcional de scikit-learn para tono. Si no se sube, se usa la IA existente.",
-                        )
-                    with c_tema:
-                        f_tema = st.file_uploader(
-                            "PKL de tema",
-                            type=["pkl"],
-                            key="pkl_tema",
-                            help="Modelo opcional de scikit-learn para tema. Si no se sube, se usa la IA existente.",
-                        )
-
                     if st.form_submit_button("▶ Iniciar Limpieza y Análisis", use_container_width=True, type="primary"):
                         if not f1:
                             st.error("Por favor, sube un archivo Excel.")
@@ -806,17 +766,6 @@ def main():
                                 except Exception as exc:
                                     st.error(f"La lista de Temas (JSON) no es válida: {exc}")
                                     st.stop()
-                            tone_bytes = f_tono.getvalue() if f_tono else None
-                            theme_bytes = f_tema.getvalue() if f_tema else None
-                            try:
-                                if tone_bytes:
-                                    load_sklearn_estimator(tone_bytes, "tono")
-                                if theme_bytes:
-                                    load_sklearn_estimator(theme_bytes, "tema")
-                            except PklClassifierError as exc:
-                                st.error(str(exc))
-                                st.stop()
-
                             st.session_state["pending_dossier"] = f1.getvalue()
                             st.session_state["pending_meta"] = {
                                 "name": f1.name,
@@ -871,8 +820,8 @@ def main():
                             else:
                                 tax_eff = tax_nombre
                             # v4.26: la prominencia también construye el config aunque no haya
-                            # IA ni PKL (es determinista, no necesita LLM).
-                            if enable_ai or tone_bytes or theme_bytes or prominencia_chk:
+                            # IA (es determinista, no necesita LLM).
+                            if enable_ai or prominencia_chk:
                                 st.session_state["pending_ai_config"] = {
                                     "enabled": bool(enable_ai),
                                     "brand": brand_input.strip(),
@@ -905,16 +854,10 @@ def main():
                                     "typesafe_model": "jev-latest",
                                     "model": modelo_input,
                                     "historial_dir": st.secrets.get("HISTORIAL_DIR"),
-                                    "tone_pkl_bytes": tone_bytes,
-                                    "theme_pkl_bytes": theme_bytes,
                                 }
                             else:
                                 st.session_state["pending_ai_config"] = None
 
-                            # v4.32: sin IA no hay Subtema_IA (ningún PKL lo genera).
-                            if not enable_ai and (tone_bytes or theme_bytes):
-                                st.warning("⚠️ IA desactivada: la columna Subtema_IA no se genera "
-                                           "(los PKL solo cubren tono y/o tema).")
                             st.session_state["procesando"] = True
                             st.session_state["processing_complete"] = False
                             st.rerun()
@@ -990,7 +933,6 @@ def main():
                         index=0,
                         key="tax_nombre_custom",
                         help="Por defecto los Temas se arman bottom-up en ESTE lote. "
-                             "Si subes un PKL de tema, se usan las clases de ese modelo. "
                              "Las listas fijas o un JSON solo se usan como nombres candidatos.",
                     )
                 criterio_custom_c = st.text_area(
@@ -1061,20 +1003,6 @@ def main():
                              "$0.10 por 1M tokens de entrada; ideal para dossiers de alto volumen).",
                     )
 
-                st.markdown('<div class="sec-label">3. Modelos PKL del cliente (opcional)</div>', unsafe_allow_html=True)
-                st.caption("Igual que la pestaña estándar: puedes subir el PKL de tono, el de tema, "
-                           "ambos o ninguno. Si un eje no tiene PKL, se mantiene el análisis con IA. "
-                           "El subtema nunca se reemplaza por PKL.")
-                cc_pt, cc_pm = st.columns(2)
-                with cc_pt:
-                    f_tono_c = st.file_uploader(
-                        "PKL de tono", type=["pkl"], key="pkl_tono_custom",
-                        help="Modelo opcional de scikit-learn para tono. Si no se sube, se usa la IA existente.")
-                with cc_pm:
-                    f_tema_c = st.file_uploader(
-                        "PKL de tema", type=["pkl"], key="pkl_tema_custom",
-                        help="Modelo opcional de scikit-learn para tema. Si no se sube, se usa la IA existente.")
-
                 if st.button("▶ Iniciar Limpieza y Análisis", use_container_width=True,
                              type="primary", key="btn_custom"):
                     if f2 is None:
@@ -1097,16 +1025,6 @@ def main():
                         try:
                             blob_custom = renombrar_columnas_xlsx(f2.getvalue(), sel_titulo, sel_cuerpo)
                         except ValueError as exc:
-                            st.error(str(exc))
-                            st.stop()
-                        tone_bytes_c = f_tono_c.getvalue() if f_tono_c else None
-                        theme_bytes_c = f_tema_c.getvalue() if f_tema_c else None
-                        try:
-                            if tone_bytes_c:
-                                load_sklearn_estimator(tone_bytes_c, "tono")
-                            if theme_bytes_c:
-                                load_sklearn_estimator(theme_bytes_c, "tema")
-                        except PklClassifierError as exc:
                             st.error(str(exc))
                             st.stop()
                         st.session_state["pending_dossier"] = blob_custom
@@ -1136,8 +1054,9 @@ def main():
                             api_key=api_key,
                             typesafe_api_key=typesafe_api_key,
                             historial_dir=st.secrets.get("HISTORIAL_DIR"),
-                            tone_pkl_bytes=tone_bytes_c,
-                            theme_pkl_bytes=theme_bytes_c,
+                            # Sin opción de subir PKL (2026-11-02): el análisis es siempre IA.
+                            tone_pkl_bytes=None,
+                            theme_pkl_bytes=None,
                             model=modelo_sel_c,
                             criterio_texto=criterio_custom_c,
                             guia_subtema=st.session_state.get("_perfil_guia_subtema") or "",
@@ -1157,10 +1076,6 @@ def main():
                             umbral_titulo=int(umbral_titulo_c),
                             umbral_cuerpo=int(umbral_cuerpo_c),
                         )
-                        # v4.32: sin IA no hay Subtema_IA (ningún PKL lo genera).
-                        if not enable_ai_c and (tone_bytes_c or theme_bytes_c):
-                            st.warning("⚠️ IA desactivada: la columna Subtema_IA no se genera "
-                                       "(los PKL solo cubren tono y/o tema).")
                         st.session_state["procesando"] = True
                         st.session_state["processing_complete"] = False
                         st.rerun()
@@ -1192,19 +1107,11 @@ def main():
                 )
 
             analisis = st.session_state.get("analisis") or {}
-            if (analisis or {}).get("modo_taxonomia") == "pkl":
-                _n_pkl = analisis.get("temas_por_pkl") or 0
-                st.success(
-                    "◆ Tema: PKL del cliente activo — %d grupos clasificados con las clases "
-                    "del modelo (verbatim, sin reescritura)." % _n_pkl
-                )
             if analisis:
                 grupos = analisis.get("grupos")
                 cubos_nuevos = analisis.get("cubos_nuevos") or []
                 reglas = analisis.get("temas_por_regla")
                 por_llm = analisis.get("temas_por_llm")
-                por_pkl = analisis.get("temas_por_pkl")
-                tonos_pkl = analisis.get("tonos_por_pkl")
                 fallback = len(analisis.get("grupos_con_fallback") or [])
                 errores = analisis.get("errores_api") or []
                 guarda = len(analisis.get("tono_corregido_por_guarda") or [])
@@ -1212,15 +1119,11 @@ def main():
                 piezas = []
                 if grupos:
                     piezas.append(f"{grupos} hechos únicos agrupados")
-                if tonos_pkl:
-                    piezas.append(f"tono clasificado con PKL del cliente ({tonos_pkl} grupos)")
-                elif votos:
+                if votos:
                     piezas.append(f"tono verificado {votos}× por grupo")
                 if guarda:
                     piezas.append(f"guarda del tono: {guarda} Negativos sin señalamiento pasaron a Neutro")
-                if por_pkl:
-                    piezas.append(f"Tema por PKL del cliente: {por_pkl}")
-                elif reglas is not None:
+                if reglas is not None:
                     piezas.append(f"Tema por reglas: {reglas} · por IA: {por_llm or 0}")
                 uni_llm = analisis.get("subtemas_unificados_llm") or 0
                 if uni_llm:
@@ -1237,16 +1140,12 @@ def main():
                 detalle_tax = analisis.get("taxonomia_detalle") or {}
                 if temas_gen:
                     modo = analisis.get("modo_taxonomia")
-                    if modo == "pkl":
-                        etiqueta = "clases del PKL del cliente"
-                    elif modo in ("lote", "automatica"):
+                    if modo in ("lote", "automatica"):
                         etiqueta = "de este lote"
                     else:
                         etiqueta = "nombres candidatos del cliente"
-                    titulo_exp = ("Temas del PKL (%d, %s)" % (len(temas_gen), etiqueta)
-                                  if modo == "pkl"
-                                  else "Temas de este lote (%d, %s)" % (len(temas_gen), etiqueta))
-                    with st.expander(titulo_exp, expanded=(modo in ("lote", "automatica", "pkl"))):
+                    titulo_exp = "Temas de este lote (%d, %s)" % (len(temas_gen), etiqueta)
+                    with st.expander(titulo_exp, expanded=(modo in ("lote", "automatica"))):
                         st.markdown(" · ".join("`%s`" % t for t in temas_gen))
                         if detalle_tax:
                             st.download_button(
@@ -1256,12 +1155,8 @@ def main():
                                     st.session_state.get("output_filename", "cliente")).replace(".xlsx", ""),
                                 mime="application/json",
                             )
-                            if modo == "pkl":
-                                st.caption("Son las clases del PKL de tema del cliente. No se inventan "
-                                           "nombres bottom-up ni se reescriben con el quality-gate del lote.")
-                            else:
-                                st.caption("Son los Temas armados bottom-up en esta corrida. El próximo lote "
-                                           "vuelve a agrupar sus propios subtemas; no se reutiliza el vocabulario.")
+                            st.caption("Son los Temas armados bottom-up en esta corrida. El próximo lote "
+                                       "vuelve a agrupar sus propios subtemas; no se reutiliza el vocabulario.")
         
             costo = (analisis or {}).get("costo_aprox_usd")
             uso_t = (analisis or {}).get("uso_tokens") or {}
