@@ -202,7 +202,7 @@ class TestEjemplosCoherentes(unittest.TestCase):
         ruta = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             'clientes', 'secretaria_general_de_la_alcaldia_de_bogota.json')
         with open(ruta, encoding='utf-8') as f:
-            self.assertIn('MISMO sub-tema', json.load(f)['guia_subtema'])
+            self.assertIn('iguales o muy parecidas', json.load(f)['guia_subtema'])
 
 
 if __name__ == '__main__':
