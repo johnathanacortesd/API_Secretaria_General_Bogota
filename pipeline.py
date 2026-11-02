@@ -249,7 +249,7 @@ KEY_MAP = {
 THOUSANDS_COLS = {"Nro. Pagina", "Dimensión", "Duración - Nro. Caracteres", "Tier", "Audiencia"}
 CURRENCY_COLS = {"CPE"}
 NUMERIC_COLS = {"ID Noticia", "ID duplicada"} | THOUSANDS_COLS | CURRENCY_COLS
-# Display "Link" as black, BOLD, non-underlined text while keeping the hyperlink.
+# Display "Link" as black, non-underlined text while keeping the hyperlink.
 PLAIN_HYPERLINK_COLUMNS = frozenset({"Link Nota", "Link (Streaming - Imagen)"})
 PLAIN_HYPERLINK_COLUMNS_NORM = frozenset(c.strip().lower() for c in PLAIN_HYPERLINK_COLUMNS)
 
@@ -1380,7 +1380,6 @@ def generate_output_excel(rows, km, progress: ProgressCb = None, columns_to_use:
     fmt_header = wb.add_format({"bold": True})
     fmt_link = wb.add_format({"font_color": "#0563C1", "underline": 1, "align": "left"})
     fmt_plain_hlink = wb.add_format({"font_color": "#000000", "underline": False, "align": "left"})
-    fmt_plain_hlink_bold = wb.add_format({"font_color": "#000000", "underline": False, "bold": True, "align": "left"})
     fmt_date = wb.add_format({"num_format": "dd/mm/yyyy", "align": "center"})
     fmt_currency = wb.add_format({"num_format": "$#,##0"})
     fmt_thousands = wb.add_format({"num_format": "#,##0"})
@@ -1405,7 +1404,7 @@ def generate_output_excel(rows, km, progress: ProgressCb = None, columns_to_use:
     try:
         _write_xlsx_rows(
             ws, rows, km, n, step, progress,
-            fmt_link, fmt_plain_hlink, fmt_plain_hlink_bold, fmt_date, fmt_currency, fmt_thousands, fmt_plain_id, cols,
+            fmt_link, fmt_plain_hlink, fmt_date, fmt_currency, fmt_thousands, fmt_plain_id, cols,
         )
         emit_progress(progress, 100, "Guardando archivo Excel…")
     finally:
@@ -1413,7 +1412,7 @@ def generate_output_excel(rows, km, progress: ProgressCb = None, columns_to_use:
     return buf.getvalue()
 
 
-def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink, fmt_plain_hlink_bold, fmt_date, fmt_currency, fmt_thousands, fmt_plain_id, cols):
+def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink, fmt_date, fmt_currency, fmt_thousands, fmt_plain_id, cols):
     for i, row in enumerate(rows):
         tk = km.get("titulo")
         if tk and tk in row:
@@ -1549,7 +1548,7 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
 
             if url:
                 display = str(cv or "Link")
-                url_fmt = fmt_plain_hlink_bold if _h_norm in PLAIN_HYPERLINK_COLUMNS_NORM else fmt_link
+                url_fmt = fmt_plain_hlink if _h_norm in PLAIN_HYPERLINK_COLUMNS_NORM else fmt_link
                 try:
                     ws.write_url(excel_row, cidx, str(url), url_fmt, string=display)
                 except Exception:
