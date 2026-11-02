@@ -83,8 +83,10 @@ class TestReglasSoloGestion(unittest.TestCase):
         self.assertEqual(et[1]['tono'], 'Neutro')
 
     def test_opinion_de_terceros_con_preocupacion_no_es_positivo(self):
+        # Sin la marca en la oración crítica: Neutro (con la marca: Negativo,
+        # ver TestReglasEtiquetasManuales).
         g = _g('Edil: preocupa el futuro de la URI de Suba',
-               'El cabildante señaló que la responsabilidad recae en el gobierno del alcalde Galán.')
+               'La Alcaldía de Bogotá construye la URI. El cabildante dijo que preocupan los retrasos.')
         et = {1: {'tono': 'Positivo', 'sub_tema': 'x', 'tipo': 'Opinión de terceros'}}
         az.aplicar_regla_opinion_terceros([g], et, B, A, voceros=V)
         self.assertEqual(et[1]['tono'], 'Neutro')
@@ -119,9 +121,89 @@ class TestVariantesRotulo(unittest.TestCase):
                                                                brand=B, aliases=A), {})
 
 
+class TestReglasEtiquetasManuales(unittest.TestCase):
+    """Calibradas con 132 notas etiquetadas a mano por el usuario."""
+
+    def test_medida_restrictiva_es_neutro(self):
+        g = _g('Pico y placa regional en Bogotá este lunes',
+               'De acuerdo con la información publicada por la Alcaldía de Bogotá, rige la medida.')
+        et = {1: {'tono': 'Positivo', 'sub_tema': 'x'}}
+        az.aplicar_regla_medida_restrictiva([g], et)
+        self.assertEqual(et[1]['tono'], 'Neutro')
+
+    def test_secretaria_distrital_que_gestiona_es_positivo(self):
+        g = _g('Nuevo programa para mujeres emprendedoras',
+               'Fuente: Alcaldía de Bogotá. La Secretaría Distrital de la Mujer lanzó un programa de becas.')
+        et = {1: {'tono': 'Neutro', 'sub_tema': 'x'}}
+        az.aplicar_regla_secretarias_distritales([g], et, B, A, voceros=V)
+        self.assertEqual(et[1]['tono'], 'Positivo')
+
+    def test_solo_credito_sigue_neutro(self):
+        g = _g('Corredor pedagógico con material reutilizado', 'Fuente: Alcaldía de Bogotá')
+        et = {1: {'tono': 'Neutro', 'sub_tema': 'x'}}
+        az.aplicar_regla_secretarias_distritales([g], et, B, A, voceros=V)
+        self.assertEqual(et[1]['tono'], 'Neutro')
+
+    def test_cargo_historico_de_secretario_no_cuenta(self):
+        g = _g('¿Quién era Antonio Navarro?',
+               'Fue secretario de Gobierno de Gustavo Petro y luego presentó su candidatura al Senado.')
+        et = {1: {'tono': 'Neutro', 'sub_tema': 'x'}}
+        az.aplicar_regla_secretarias_distritales([g], et, B, A, voceros=V)
+        self.assertEqual(et[1]['tono'], 'Neutro')
+
+    def test_titular_bogota_nombra_es_positivo(self):
+        g = _g('Bogotá nombra nueva líder social', 'Juliana Sánchez será la nueva funcionaria.')
+        et = {1: {'tono': 'Neutro', 'sub_tema': 'x'}}
+        az.aplicar_regla_secretarias_distritales([g], et, B, A, voceros=V)
+        self.assertEqual(et[1]['tono'], 'Positivo')
+
+    def test_critica_de_tercero_a_la_marca_es_negativo(self):
+        g = _g('Edil: preocupa el futuro de la URI de Suba',
+               'El cabildante señaló que la responsabilidad recae en el gobierno del alcalde Galán.')
+        et = {1: {'tono': 'Positivo', 'sub_tema': 'x', 'tipo': 'Opinión de terceros'}}
+        az.aplicar_regla_opinion_terceros([g], et, B, A, voceros=V)
+        self.assertEqual(et[1]['tono'], 'Negativo')
+
+    def test_tipo_por_actor(self):
+        gs = [_g('Plan retorno en Bogotá hoy', 'Miles de vehículos ingresarán.'),
+              _g('Muere Navarro', 'El alcalde de Bogotá, Carlos Fernando Galán, envió un mensaje de condolencia.'),
+              _g('Quién era Navarro', 'En 2012, cuando Petro llegó a la Alcaldía de Bogotá, nombró a Navarro.')]
+        for k, g in enumerate(gs, 1):
+            g['grupo'] = k
+        et = {1: {'tipo': 'Proyectos y programas'}, 2: {'tipo': 'Información general'},
+              3: {'tipo': 'Institucional'}}
+        az.aplicar_tipo_por_actor(gs, et, B, A, voceros=V)
+        self.assertEqual([et[k]['tipo'] for k in (1, 2, 3)],
+                         ['Institucional', 'Institucional', 'Información general'])
+
+    def test_un_subtema_por_evento_grande(self):
+        titulos = ['Murió Antonio Navarro Wolff a los 78 años', '¿Quién era Antonio Navarro Wolff?',
+                   'Así despiden a Antonio Navarro Wolff', 'Antonio Navarro Wolff: su legado']
+        subs = ['Muerte de Antonio Navarro Wolff', 'Trayectoria política de Antonio Navarro',
+                'Muerte de Antonio Navarro Wolff', 'Legado de Navarro Wolff']
+        ctx = 'Antonio Navarro Wolff murió; su muerte conmovió al país.'
+        rows = [{'Título': t, 'CuerpoEs': ctx, 'Contexto analizado': ctx} for t in titulos]
+        et = {i + 1: {'sub_tema': s_} for i, s_ in enumerate(subs)}
+        aj = az.unificar_por_asunto_titular(rows, {i: i + 1 for i in range(4)}, et, {},
+                                            {'titulo': 'Título'}, brand=B, aliases=A, voceros=V)
+        finales = {aj.get(i) or subs[i] for i in range(4)}
+        self.assertEqual(finales, {'Muerte de Antonio Navarro Wolff'})
+
+    def test_asuntos_distintos_no_se_mezclan(self):
+        titulos = ['Pico y placa regional este lunes', 'Pico y placa regional: horarios',
+                   'Pico y placa regional y reversible', 'Noche de Museos abre gratis']
+        subs = ['Pico y placa festivo', 'Pico y placa festivo', 'Horarios del pico y placa', 'Noche de Museos gratis']
+        rows = [{'Título': t, 'CuerpoEs': t, 'Contexto analizado': t} for t in titulos]
+        et = {i + 1: {'sub_tema': s_} for i, s_ in enumerate(subs)}
+        aj = az.unificar_por_asunto_titular(rows, {i: i + 1 for i in range(4)}, et, {},
+                                            {'titulo': 'Título'}, brand=B, aliases=A, voceros=V)
+        self.assertNotIn(3, aj)
+
+
 class TestPerfil(unittest.TestCase):
     def test_flag_y_criterio(self):
         self.assertTrue(P['tono_solo_gestion'])
+        self.assertTrue(P['tipo_por_actor'])
         self.assertNotIn('declaración que los deja bien', P['criterio_custom'])
         self.assertIn('condolencias', P['criterio_custom'])
         self.assertEqual(perfil_cliente.validar_perfil(P), [])

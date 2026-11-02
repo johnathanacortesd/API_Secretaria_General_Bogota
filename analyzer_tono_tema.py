@@ -1973,6 +1973,53 @@ def aplicar_genero_por_seccion(rows, mapa, etiquetas, km):
 _RANKING_TITULO_PAT = re.compile(r'\b(ranking|listado|posicionamiento|escalaf[óo]n)\b', re.IGNORECASE)
 
 
+_REACCION_PAT = re.compile(
+    r'\b(mensaje|pronunci\w*|record\w*|resalt\w*|destac\w*|a[ñn]ad\w*|lament\w*|expres\w*|'
+    r'reconoci\w*|escribi\w*|trin\w*|redes sociales|cuenta de x|declar\w*|asegur\w*|afirm\w*|'
+    r'dijo|se[ñn]al\w*|indic\w*|anunci\w*|explic\w*)\b', re.I)
+
+
+def aplicar_tipo_por_actor(grupos, etiquetas, brand, aliases, voceros=()):
+    """TIPO calibrado con 132 notas etiquetadas a mano (v1.33, flag
+    tipo_por_actor). Acierto 43 % -> 74 % en la repetición:
+      - Medida normativa del Distrito (pico y placa, restricciones,
+        decretos, calendario, plan retorno) => Institucional.
+      - Sin mención válida de la marca (solo el cargo, administraciones
+        pasadas, otros alcaldes u homónimos) => Información general.
+      - Información general en la que el alcalde, el secretario o la
+        entidad habla o actúa oficialmente => Institucional.
+    No toca Ranking ni Opinión de terceros. Devuelve grupos cambiados."""
+    actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
+               if x and len(nz(x)) >= 4]
+    medida = re.compile(_MEDIDA_RESTRICTIVA_PAT.pattern[:-len(r')\b')] + r'|plan\s+retorno)\b', re.I)
+    cambios = 0
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e:
+            continue
+        t = e.get('tipo')
+        if t in ('Ranking', 'Opinión de terceros') or not t:
+            continue
+        crudo = '%s. %s' % (g.get('titulo') or '', g.get('contexto') or g.get('texto') or '')
+        nuevo = t
+        if medida.search(crudo) and t in ('Proyectos y programas', 'Información general'):
+            nuevo = 'Institucional'
+        else:
+            texto = _enmascarar_menciones_ajenas(crudo, voceros)
+            oraciones = [o for o in re.split(r'(?<=[.!?;:])\s+|\n+', ctrl(texto))
+                         if any(a in nz(o) for a in actores)]
+            if not oraciones:
+                nuevo = 'Información general'
+            elif t == 'Información general' and (
+                    any(HABLA_PAT.search(nz(o)) or _REACCION_PAT.search(o) for o in oraciones)
+                    or _marca_sujeto_de_gestion(texto, actores)):
+                nuevo = 'Institucional'
+        if nuevo != t:
+            e['tipo'] = nuevo
+            cambios += 1
+    return cambios
+
+
 def aplicar_tipo_por_ranking(rows, mapa, etiquetas, km, brand, aliases):
     """Rescate TIPO=Ranking (v1.20, solo con flag clasificar_tipo_genero):
     título con ranking/listado/posicionamiento/escalafón + marca/alias
@@ -5130,6 +5177,81 @@ def _desempate_tono(empatados, texto: str, brand: str = '',
     return 'Neutro'
 
 
+def unificar_por_asunto_titular(rows, mapa, etiquetas, ajustes_subtema, km,
+                                brand='', aliases=(), voceros=()):
+    """v1.33 (agrupación estricta): un solo subtema por ASUNTO o evento grande.
+
+    Regla del usuario 2026-11-02 («cobertura de una muerte o un evento
+    grande: un solo subtema para todas las notas»), calibrada con 132 notas
+    etiquetadas a mano: el asunto es una frase distintiva de 2 palabras de
+    contenido (sin marca, fechas, cifras ni genéricos) que se repite en los
+    TITULARES de al menos 3 notas distintas («navarro wolff», «pico placa»,
+    «plan retorno»). Las notas que comparten una de esas frases forman un
+    bloque; cada nota toma el subtema más frecuente del bloque que sea bien
+    formado y fiel a su titular + Contexto analizado + inicio del cuerpo. Si
+    ninguno lo es, la nota conserva el suyo (no se fuerza). En la repetición:
+    Navarro Wolff 19 -> 6 subtemas, pico y placa 7 -> 4, sin mezclas nuevas.
+    Devuelve el dict de ajustes actualizado."""
+    ajustes = dict(ajustes_subtema or {})
+    filas = [i for i, r in enumerate(rows) if not r.get('is_duplicate') and mapa.get(i) is not None]
+    if len(filas) < 3:
+        return ajustes
+    marca = _tokens_marca(brand, aliases, voceros)
+
+    def _toks(t):
+        return [w for w in words(nz(t)) if w not in GENERIC_TITULO and w not in CONECT
+                and w not in marca and w not in _FECHA_TITULO and not w.isdigit() and len(w) >= 3]
+
+    def _big(t):
+        ws = _toks(t)
+        return {(a, b) for a, b in zip(ws, ws[1:])}
+    tit = {i: _titulo_fila(rows[i], km) for i in filas}
+    df = Counter(b for t in dict.fromkeys(tit.values()) for b in _big(t))
+    claves = {b for b, c in df.items() if c >= 3}
+    if not claves:
+        return ajustes
+    par = {i: i for i in filas}
+
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+    primero = {}
+    for i in filas:
+        for b in _big(tit[i]) & claves:
+            if b in primero:
+                ra, rb = find(i), find(primero[b])
+                if ra != rb:
+                    par[max(ra, rb)] = min(ra, rb)
+            else:
+                primero[b] = i
+
+    def _final(i):
+        return (ajustes.get(i) or '').strip() or \
+            str((etiquetas.get(mapa.get(i)) or {}).get('sub_tema') or '').strip()
+
+    def _fuente(i):
+        c = str(rows[i].get('Contexto analizado') or '').strip()
+        c = '' if c == '-' else c
+        return '%s %s' % (c, _texto_fila(rows[i], km)[:1500])
+    comp = defaultdict(list)
+    for i in filas:
+        comp[find(i)].append(i)
+    for ms in comp.values():
+        if len(ms) < 2:
+            continue
+        cnt = Counter(_final(i) for i in ms if _final(i))
+        orden = sorted(cnt, key=lambda c: (-cnt[c], -len(c.split()), c))
+        for i in ms:
+            for c in orden:
+                if _rotulo_bien_formado(c, [tit[i]]) and _rotulo_fiel(c, tit[i], _fuente(i), brand, aliases):
+                    if nz(c) != nz(_final(i)):
+                        ajustes[i] = c
+                    break
+    return ajustes
+
+
 def unificar_variantes_rotulo_estricto(rows, mapa, etiquetas, ajustes_subtema, km,
                                        brand='', aliases=()):
     """v1.33 (agrupación estricta): une VARIANTES del mismo rótulo
@@ -7175,6 +7297,7 @@ def enrich_rows_with_ai(
         'tono_distrito_positivo': bool(extra.get('tono_distrito_positivo')),
         'agrupacion_estricta': bool(extra.get('agrupacion_estricta')),
         'tono_solo_gestion': bool(extra.get('tono_solo_gestion')),
+        'tipo_por_actor': bool(extra.get('tipo_por_actor')),
         'api_key': api_key,
         'typesafe_api_key': extra.get('typesafe_api_key') or '',
         'typesafe_model': extra.get('typesafe_model') or 'jev-latest',
@@ -7362,6 +7485,14 @@ def enrich_rows_with_ai(
             if opiniones:
                 _ULTIMO_RESUMEN['tono_opinion_terceros_a_neutro'] = opiniones
                 incidental = list(incidental) + list(opiniones)
+            restrictivas = aplicar_regla_medida_restrictiva(grupos_tono, etiquetas)
+            if restrictivas:
+                _ULTIMO_RESUMEN['tono_medida_restrictiva_a_neutro'] = restrictivas
+                incidental = list(incidental) + list(restrictivas)
+            secretarias = aplicar_regla_secretarias_distritales(
+                grupos_tono, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
+            if secretarias:
+                _ULTIMO_RESUMEN['tono_secretarias_distritales'] = secretarias
         if incidental:
             _ULTIMO_RESUMEN['tono_positivo_incidental'] = incidental
             if progress_callback:
@@ -7443,6 +7574,11 @@ def enrich_rows_with_ai(
     if cfg.get('clasificar_tipo_genero'):
         aplicar_genero_por_seccion(rows, mapa, etiquetas, km)
         # v1.20: TIPO Ranking por título (solo desde Información general).
+        if cfg.get('tipo_por_actor'):
+            # v1.33: TIPO por quién habla o actúa (antes del Ranking, que
+            # tiene la última palabra).
+            aplicar_tipo_por_actor(grupos, etiquetas, brand, aliases,
+                                   voceros=cfg.get('voceros') or [])
         aplicar_tipo_por_ranking(rows, mapa, etiquetas, km, brand, aliases)
 
     # v1.10: garantía FINAL y determinista (2026-10-31): mismo Título
@@ -7505,6 +7641,11 @@ def enrich_rows_with_ai(
             rows, mapa, etiquetas, ajustes_fieles, km, brand=brand, aliases=aliases,
             voceros=cfg.get('voceros') or [])
     else:
+        ajustes_fieles = unificar_variantes_rotulo_estricto(
+            rows, mapa, etiquetas, ajustes_fieles, km, brand=brand, aliases=aliases)
+        ajustes_fieles = unificar_por_asunto_titular(
+            rows, mapa, etiquetas, ajustes_fieles, km, brand=brand, aliases=aliases,
+            voceros=cfg.get('voceros') or [])
         ajustes_fieles = unificar_variantes_rotulo_estricto(
             rows, mapa, etiquetas, ajustes_fieles, km, brand=brand, aliases=aliases)
     _nuevos_uni = sum(1 for _i, _v in ajustes_fieles.items()
@@ -8137,17 +8278,121 @@ def aplicar_regla_opinion_terceros(grupos, etiquetas, brand, aliases, voceros=()
     """v1.33 (tono_solo_gestion): una Opinión de terceros con preocupación,
     reclamo o crítica sobre la marca no es Positivo (caso real: un edil
     preocupado por la URI de Suba, que señala la responsabilidad del
-    gobierno distrital, salía Positivo). Baja a Neutro; el Negativo lo decide
-    el modelo con el criterio. Devuelve los grupos corregidos."""
+    gobierno distrital, salía Positivo). Si la oración crítica nombra a la
+    marca o a su vocero => Negativo; si no => Neutro. Devuelve los grupos
+    corregidos."""
     corregidos = []
     for g in grupos:
         e = etiquetas.get(g.get('grupo'))
         if not e or e.get('tono') != 'Positivo' or e.get('tipo') != 'Opinión de terceros':
             continue
         texto = '%s. %s' % (g.get('titulo') or '', g.get('contexto') or g.get('texto') or '')
-        if _PREOCUPACION_PAT.search(texto):
+        if not _PREOCUPACION_PAT.search(texto):
+            continue
+        actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
+                   if x and len(nz(x)) >= 4]
+        # v1.33: si la oración de preocupación/crítica nombra a la marca o
+        # a su vocero, la crítica va dirigida a ellos => Negativo (caso del
+        # edil y la URI de Suba, Negativo en la etiqueta manual).
+        dirigida = any(_PREOCUPACION_PAT.search(o) and any(a in nz(o) for a in actores)
+                       for o in re.split(r'(?<=[.!?;:])\s+|\n+', ctrl(texto)))
+        e['tono'] = 'Negativo' if dirigida else 'Neutro'
+        e.setdefault('flags', {})['neutro_pegajoso'] = True
+        corregidos.append(g.get('grupo'))
+    return corregidos
+
+
+# v1.33 (tono_solo_gestion), calibrado con 132 notas etiquetadas a mano.
+_MEDIDA_RESTRICTIVA_PAT = re.compile(
+    r'\b(pico\s+y\s+placa|restricci\w+|decret\w+|calendario\s+de\s+restricci\w+|esquema\s+rotativo|'
+    r'prohibici\w+|ley\s+seca|toque\s+de\s+queda|parrillero)\b', re.I)
+_ENTIDAD_DISTRITAL_PAT = (
+    r'(?:secretar[ií]a\s+(?:distrital\s+)?de\s+(?:la\s+)?\w+|secretari[oa]\s+(?:distrital\s+)?de\s+(?:la\s+)?\w+|'
+    r'\bidu\b|\buaesp\b|\bidrd\b|\bidpc\b|\bipes\b|\beaab\b|acueducto\s+de\s+bogota|transmilenio|'
+    r'empresa\s+metro|caja\s+de\s+(?:la\s+)?vivienda\s+popular|jardin\s+botanico|idartes|'
+    r'orquesta\s+filarmonica|instituto\s+distrital\s+\w+|unidad\s+administrativa\s+especial\s+\w+)')
+_CARGO_HISTORICO_PAT = re.compile(
+    r'\b(?:ocup[oó]|asumi[oó]|renunci[oó]|fue|ejerci[oó]|desempe[ñn][oó]|nombr[oó]\s+a\s+\w+(?:\s+\w+)?\s+como|'
+    r'haber\s+sido|como)\s+(?:\w+\s+){0,3}?(?:la\s+|el\s+|su\s+)?secretar[ií][oa]s?\s+de\s+\w+'
+    r'(?:\s+de\s+(?:Gustavo\s+)?Petro)?', re.I)
+
+
+def aplicar_regla_medida_restrictiva(grupos, etiquetas):
+    """Medidas restrictivas del Distrito (pico y placa, restricciones,
+    decretos, calendario) en el TITULAR => Neutro (18 de 21 en las notas
+    etiquetadas a mano). Pegajoso. Devuelve los grupos corregidos."""
+    corregidos = []
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or e.get('tono') != 'Positivo':
+            continue
+        if _MEDIDA_RESTRICTIVA_PAT.search(str(g.get('titulo') or '')):
             e['tono'] = 'Neutro'
             e.setdefault('flags', {})['neutro_pegajoso'] = True
+            corregidos.append(g.get('grupo'))
+    return corregidos
+
+
+def _entidad_distrital_gestiona(texto: str) -> bool:
+    """Una secretaría distrital, entidad del Distrito o funcionario es sujeto
+    de una gestión (≤4 palabras antes del verbo, misma cláusula). Los cargos
+    históricos («fue secretario de Gobierno de Petro») no cuentan."""
+    t = _CARGO_HISTORICO_PAT.sub(' XAJENAX ', ctrl(texto or ''))
+    verbo = _VERBOS_GESTION_PAT.pattern.replace('\\b(', '(', 1)
+    pat = re.compile(_ENTIDAD_DISTRITAL_PAT + r'(?:\s+[\w]+){0,4}?\s+' + verbo)
+    for clausula in re.split(r'[,.;:!?()\n]+', t):
+        if pat.search(nz(clausula)):
+            return True
+    return False
+
+
+# Titular con «Bogotá» o el Distrito como sujeto de una gestión («Bogotá
+# nombra nueva líder social», «Bogotá abre convocatoria», «Bogotá invita a
+# prevenir…»): Positivo en las notas etiquetadas a mano.
+_TITULAR_DISTRITO_CACHE = []
+
+
+def _titular_distrito_gestiona(titulo: str) -> bool:
+    """True si el titular empieza con Bogotá, la Alcaldía o el Distrito como
+    sujeto de un verbo de gestión. El patrón se arma al primer uso porque la
+    lista de verbos se define más abajo en el módulo."""
+    if not _TITULAR_DISTRITO_CACHE:
+        sujeto = r'^\W*(?:la\s+)?(?:bogota|alcaldia(?:\s+de\s+bogota)?|el\s+distrito|distrito)\s+'
+        verbos = _VERBOS_GESTION_PAT.pattern.replace('\\b(', '(', 1)
+        _TITULAR_DISTRITO_CACHE.append(re.compile(
+            sujeto + verbos + '|' + sujeto +
+            r'(?:refuerza|fortalece|promueve|invita|celebra|reconoce|mejora|amplia|extiende)\b'))
+    return bool(_TITULAR_DISTRITO_CACHE[0].search(nz(titulo or '')))
+
+
+def aplicar_regla_secretarias_distritales(grupos, etiquetas, brand, aliases, voceros=()):
+    """Regla del usuario (2026-11-02): si la Alcaldía solo aparece como
+    crédito es Neutro, pero si una secretaría distrital, entidad del Distrito
+    o funcionario ejecuta una gestión => Positivo. No sube medidas
+    restrictivas, noticias de fallecimiento ni Neutros pegajosos, ni con
+    crítica dirigida. Devuelve los grupos corregidos."""
+    blancos = _con_voceros(aliases, voceros)
+    corregidos = []
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or e.get('tono') != 'Neutro':
+            continue
+        if (e.get('flags') or {}).get('neutro_pegajoso'):
+            continue
+        titulo = str(g.get('titulo') or '')
+        texto = '%s. %s' % (titulo, g.get('contexto') or g.get('texto') or '')
+        if _MEDIDA_RESTRICTIVA_PAT.search(titulo) or _NOTICIA_PROTOCOLO_PAT.search(texto):
+            continue
+        if e.get('tipo') == 'Opinión de terceros':
+            continue
+        if _marca_blanco_de_critica(texto, brand, blancos):
+            continue
+        actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
+                   if x and len(nz(x)) >= 4]
+        if (_entidad_distrital_gestiona(texto)
+                or _marca_sujeto_de_gestion(texto, actores)
+                or _titular_distrito_gestiona(titulo)):
+            e['tono'] = 'Positivo'
             corregidos.append(g.get('grupo'))
     return corregidos
 
@@ -8200,6 +8445,17 @@ _MARCA_ACTORA_PAT = re.compile(
     r'entreg[óo])\b', re.I)
 
 
+# v1.33: verbos de gestión para «sujeto de gestión» (los de _MARCA_ACTORA_PAT
+# más nombramientos, convocatorias, aperturas e inversiones). Lista aparte
+# para no ampliar las reglas que usan _marca_actora (tragedia).
+_VERBOS_GESTION_PAT = re.compile(
+    _MARCA_ACTORA_PAT.pattern[:-len(r')\b')] +
+    r'|nombr\w*|design\w*|posesion\w*|abri[oó]|abre|abrir[aá]|habilit\w*|ofrec\w*|'
+    r'implement\w*|invit\w*|radic\w*|destin\w*|invirti\w*|invierte|recuper\w*|'
+    r'renov\w*|construy\w*|instal\w*|activ[oó]|habilitar[aá]|aplicar[aá]|ejecut\w*|'
+    r'intervin\w*|interviene|desarticul\w*|captur\w*|dot[oó]|benefici\w*)\b', re.I)
+
+
 def _marca_sujeto_de_gestion(texto: str, actores: Sequence[str]) -> bool:
     """v1.31: True si un actor de la marca va seguido, a lo sumo 4 palabras
     después, de un verbo de gestión (presentó, entregó, inauguró, anunció,
@@ -8210,7 +8466,7 @@ def _marca_sujeto_de_gestion(texto: str, actores: Sequence[str]) -> bool:
     if not texto or not formas:
         return False
     mpat = '(?:' + '|'.join(re.escape(a) for a in sorted(formas, key=len, reverse=True)) + ')'
-    verbo = _MARCA_ACTORA_PAT.pattern.replace('\\b(', '(', 1)
+    verbo = _VERBOS_GESTION_PAT.pattern.replace('\\b(', '(', 1)
     pat = re.compile(r'\b' + mpat + r'\b(?:\s+\w+){0,4}?\s+' + verbo)
     # Por cláusula: la coma, el punto o el punto y coma cortan el sujeto
     # («Según datos de la Alcaldía, la empresa X inauguró…» no cuenta).

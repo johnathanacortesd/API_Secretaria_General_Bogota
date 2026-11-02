@@ -489,3 +489,40 @@ de 60 Positivos eran menciones referenciales.
 - **Columna texto**: si el texto es un crédito al final del Resumen
   ("Fuente: Alcaldía de Bogotá."), se completa con las oraciones
   anteriores, literales (13 notas tenían 4 a 11 palabras).
+
+### v1.33, segunda parte: calibración con 132 notas etiquetadas a mano
+
+Con el archivo de etiquetas manuales del usuario (IMPACTO, TEMA, TIPO,
+GÉNERO) se midió el acierto real y se calibraron las reglas:
+
+| | v1.32 | v1.33 |
+|---|---|---|
+| Tono | 34 % | 93 % |
+| TIPO | 43 % | 75 % |
+| GÉNERO | 100 % | 100 % |
+| Subtemas distintos (manual: 27) | 57 | 35 |
+| Navarro Wolff (71 notas) | 19 subtemas | 3 |
+
+- **Tono** (con `tono_solo_gestion`):
+  - Medidas restrictivas del Distrito en el titular (pico y placa,
+    restricciones, decretos, calendario) => Neutro.
+  - Regla del usuario: Alcaldía solo como crédito => Neutro, pero si una
+    secretaría distrital, una entidad del Distrito o un funcionario
+    ejecuta la gestión => Positivo. También es Positivo el titular con
+    "Bogotá" o la Alcaldía como sujeto de una gestión ("Bogotá nombra",
+    "Bogotá abre convocatoria").
+  - Nombramientos, convocatorias, aperturas, inversiones y capturas
+    cuentan como gestión.
+  - Crítica de un tercero que nombra a la marca o a su vocero => Negativo
+    (si no la nombra, Neutro).
+- **TIPO** (flag `tipo_por_actor`): medida normativa del Distrito =>
+  Institucional; sin mención válida de la marca (solo el cargo,
+  administraciones pasadas, otros alcaldes u homónimos) => Información
+  general; Información general en que el alcalde, el secretario o la
+  entidad habla o actúa oficialmente => Institucional.
+- **Subtema: un solo subtema por evento grande** (regla del usuario, en
+  agrupación estricta): las notas cuyos titulares comparten una frase
+  distintiva repetida en al menos 3 titulares ("navarro wolff", "pico
+  placa", "plan retorno") toman el subtema más frecuente del bloque, si
+  corresponde a cada nota (titular + Contexto analizado + inicio del
+  cuerpo).
