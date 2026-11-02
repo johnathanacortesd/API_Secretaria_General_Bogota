@@ -420,3 +420,35 @@ especificación del usuario.
   analizado es más corto, se completa con oraciones completas y literales
   del Resumen - Aclaracion (sin palabras que no estén ahí; sin el
   titular). Si el resumen no alcanza, queda lo que haya.
+
+## Novedades v1.31 (2026-11-02; solo Secretaría)
+
+Agrupación lógica y estricta: solo se agrupan noticias iguales o muy
+parecidas; las notas específicas conservan su propio subtema.
+
+- **Agrupación estricta** (`agrupacion_estricta: true` en el perfil): dos
+  noticias comparten subtema SOLO con evidencia: título igual o muy
+  parecido (ratio/token_sort >= 85 % sobre palabras de contenido),
+  Contexto analizado con pasajes literales compartidos (>= 50 % de
+  5-gramas) o CuerpoEs igual o muy parecido (>= 50 %). Se omiten las
+  uniones por parecido del rótulo (canonización, unificación por
+  similitud, rótulos finales) y por "ancla" temática (misma historia de
+  riesgo, mismo evento, ancla de persona). Los pases finales por título
+  usan el mismo umbral estricto (antes token_set 60-70, que unía
+  titulares que solo compartían palabras).
+- **Guía de subtema**: precisa por nota; usa el nombre del proyecto
+  solo si la nota trata de él; no forzar una nota a un tema ajeno.
+- **Más ágil con el mismo modelo**: la consolidación ya no envía todo el
+  dossier al modelo; solo los grupos con evidencia, y sin llamada si uno
+  de sus subtemas ya es fiel a todos. La auditoría de tono Jev corre en
+  paralelo con el etiquetado (antes esperaba a que terminara).
+- **Tono, correcciones**:
+  - El patrón de "crítica" no exigía inicio de palabra: "atac"
+    coincidía dentro de "contratación", y cualquier nota de contratación
+    del distrito se trataba como crítica (Positivo bajaba a Neutro).
+  - Cuando la marca o su vocero es sujeto de una gestión ("la Alcaldía
+    presentó…", "el alcalde entregó…"), el Positivo ya no baja a Neutro
+    por tener una sola mención.
+  - Empates de tono dentro de la misma noticia: se deciden con la
+    evidencia del texto (gestión de la marca => Positivo; crítica
+    dirigida => Negativo) en vez de ir siempre a Neutro.
