@@ -458,3 +458,34 @@ parecidas; las notas específicas conservan su propio subtema.
 - Se quita la sección "📝 Resumen para informe" (pedido del usuario) y su
   módulo `resumen_informe.py`. Las secciones anteriores de este README que
   la describen quedan como historial.
+
+## Novedades v1.33 (2026-11-02; solo Secretaría)
+
+Correcciones a partir de la evaluación de un dossier real (189 notas, boletín
+1 p.m. del 2026-11-02): 107 de 176 notas salían Positivas y 0 Negativas; más
+de 60 Positivos eran menciones referenciales.
+
+- **Tono solo por gestión** (flag `tono_solo_gestion` en el perfil):
+  - Que el alcalde o la entidad *hable* (dijo, señaló, recordó) o firme una
+    columna ya no sube a Positivo: el Positivo exige gestión o labor.
+  - Menciones que no son de la marca se ignoran para el tono: el cargo
+    ("aspirante/candidato a la Alcaldía de Bogotá", "cuando Petro era
+    alcalde", "durante la administración de Petro", "sucesor del alcalde"),
+    otros alcaldes ("el alcalde Cristian Portilla", "el alcalde de Cali") y
+    homónimos del vocero ("Juan Manuel Galán").
+  - Condolencias, homenajes y reacciones del alcalde en noticias de
+    fallecimiento o despedida => Neutro (69 notas sobre Navarro Wolff salían
+    Positivas), salvo que la Alcaldía ejecute una gestión (anuncia, entrega…).
+  - Opinión de terceros con preocupación o crítica sobre la marca no puede
+    ser Positivo, y la regla del distrito no la sube.
+  - Criterio del perfil: sin "declaración que los deja bien" y con la lista
+    explícita de casos Neutros.
+  - Repetición sin conexión sobre el dossier: Positivos 107 -> 30.
+- **Variantes del mismo rótulo** (con agrupación estricta): "Fallecimiento de
+  Antonio Navarro" = "...Wolff" = "Muerte de Antonio Navarro Wolff" se unen
+  si el rótulo elegido corresponde a cada nota (Navarro: 18 -> 14 subtemas;
+  los ángulos distintos, como trayectoria o relación con Petro, quedan
+  aparte).
+- **Columna texto**: si el texto es un crédito al final del Resumen
+  ("Fuente: Alcaldía de Bogotá."), se completa con las oraciones
+  anteriores, literales (13 notas tenían 4 a 11 palabras).

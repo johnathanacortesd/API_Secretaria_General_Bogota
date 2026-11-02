@@ -425,7 +425,7 @@ MODELO_DEFECTO = "gpt-6-luna"
 # v4.53: sello del analizador. El encabezado de la app lo muestra junto a
 # APP_VERSION; si el despliegue muestra un sello distinto (o "sin-sello"),
 # el contenedor NO corre este archivo aunque el encabezado diga otra versión.
-ANALYZER_BUILD = "v4.71-agrupacion-estricta"  # v4.62: ancla de riesgo + clases de sinonimia
+ANALYZER_BUILD = "v4.72-tono-solo-gestion"  # v4.62: ancla de riesgo + clases de sinonimia
 # v4.53: solo cambia el sello (la lógica del analizador no se toca en esta versión;
 # el cambio es de interfaz).
 JEV_URL_DEFECTO = "https://api.typesafe.ai/v1/systemone"
@@ -5130,6 +5130,67 @@ def _desempate_tono(empatados, texto: str, brand: str = '',
     return 'Neutro'
 
 
+def unificar_variantes_rotulo_estricto(rows, mapa, etiquetas, ajustes_subtema, km,
+                                       brand='', aliases=()):
+    """v1.33 (agrupación estricta): une VARIANTES del mismo rótulo
+    («Fallecimiento de Antonio Navarro» = «Fallecimiento de Antonio Navarro
+    Wolff» = «Muerte de Antonio Navarro Wolff»), que la v1.31 dejaba
+    separadas al apagar la canonización. Solo une rótulos que
+    `_subtemas_mismo_hecho` considera el mismo hecho, y el rótulo elegido
+    (el de más notas) debe ser bien formado y fiel al titular + Contexto
+    analizado de CADA nota que lo recibe; si no lo es para una nota, esa
+    nota conserva el suyo. Devuelve el dict de ajustes actualizado."""
+    ajustes = dict(ajustes_subtema or {})
+    finales = {}
+    for i, row in enumerate(rows):
+        if row.get('is_duplicate') or mapa.get(i) is None:
+            continue
+        lab = (ajustes.get(i) or '').strip() or \
+            str((etiquetas.get(mapa.get(i)) or {}).get('sub_tema') or '').strip()
+        if lab:
+            finales[i] = lab
+    forma, peso = {}, Counter()
+    for i, lab in finales.items():
+        forma.setdefault(nz(lab), lab)
+        peso[nz(lab)] += 1
+    claves = sorted(forma)
+    if len(claves) < 2:
+        return ajustes
+    par = {k: k for k in claves}
+
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+    for a_i in range(len(claves)):
+        for b_i in range(a_i + 1, len(claves)):
+            a, b = claves[a_i], claves[b_i]
+            if find(a) != find(b) and _subtemas_mismo_hecho(forma[a], forma[b]):
+                par[find(b)] = find(a)
+    comp = defaultdict(list)
+    for k in claves:
+        comp[find(k)].append(k)
+
+    def _ctx(i):
+        c = str(rows[i].get('Contexto analizado') or '').strip()
+        return c if c and c != '-' else _texto_fila(rows[i], km)
+    for ks in comp.values():
+        if len(ks) < 2:
+            continue
+        orden = sorted(ks, key=lambda k: (-peso[k], -len(k.split()), k))
+        filas = [i for i, lab in finales.items() if nz(lab) in ks]
+        for i in filas:
+            tit = _titulo_fila(rows[i], km)
+            for k in orden:
+                c = forma[k]
+                if _rotulo_bien_formado(c, [tit]) and _rotulo_fiel(c, tit, _ctx(i), brand, aliases):
+                    if nz(c) != nz(finales[i]):
+                        ajustes[i] = c
+                    break
+    return ajustes
+
+
 def garantizar_coherencia_hecho(rows: List[dict], mapa: Dict[int, int],
                                 etiquetas: Dict[int, dict],
                                 ajustes_subtema: Optional[Dict[int, str]], km: dict,
@@ -7113,6 +7174,7 @@ def enrich_rows_with_ai(
         'clasificar_tipo_genero': bool(extra.get('clasificar_tipo_genero')),
         'tono_distrito_positivo': bool(extra.get('tono_distrito_positivo')),
         'agrupacion_estricta': bool(extra.get('agrupacion_estricta')),
+        'tono_solo_gestion': bool(extra.get('tono_solo_gestion')),
         'api_key': api_key,
         'typesafe_api_key': extra.get('typesafe_api_key') or '',
         'typesafe_model': extra.get('typesafe_model') or 'jev-latest',
@@ -7234,16 +7296,31 @@ def enrich_rows_with_ai(
         # deshacerlas. Caso real Unisimón: la guarda detectaba Positivo en
         # «La Universidad de Atalaya» y el voto posterior lo revertía a
         # Neutro por mayoría del subtema ajeno.
-        unificados = unificar_tono_mismo_hecho(grupos, etiquetas, brand=brand,
+        # v1.33 (tono_solo_gestion): las reglas de tono ven el texto con las
+        # menciones ajenas enmascaradas (cargo, otros alcaldes, homónimos).
+        solo_gestion = bool(cfg.get('tono_solo_gestion'))
+        if solo_gestion:
+            _vz = cfg.get('voceros') or []
+            grupos_tono = [dict(g,
+                                titulo=_enmascarar_menciones_ajenas(g.get('titulo') or '', _vz),
+                                titulos_alt=[_enmascarar_menciones_ajenas(t, _vz)
+                                             for t in (g.get('titulos_alt') or [])],
+                                contexto=_enmascarar_menciones_ajenas(g.get('contexto') or '', _vz),
+                                contexto_marca=_enmascarar_menciones_ajenas(g.get('contexto_marca') or '', _vz),
+                                texto=_enmascarar_menciones_ajenas(g.get('texto') or '', _vz))
+                           for g in grupos]
+        else:
+            grupos_tono = grupos
+        unificados = unificar_tono_mismo_hecho(grupos_tono, etiquetas, brand=brand,
                                                aliases=aliases,
                                                voceros=cfg.get('voceros') or [])
         if unificados:
             _ULTIMO_RESUMEN['tono_unificado_mismo_hecho'] = unificados
-        corregidos = aplicar_guarda_tono(grupos, etiquetas, brand, aliases,
+        corregidos = aplicar_guarda_tono(grupos_tono, etiquetas, brand, aliases,
                                          voceros=cfg.get('voceros') or [])
         # Crítica con respuesta de la marca: la información se equilibra → Neutro.
         equilibrio = aplicar_regla_critica_con_respuesta(
-            grupos, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
+            grupos_tono, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
         if equilibrio:
             _ULTIMO_RESUMEN['tono_critica_con_respuesta'] = equilibrio
             if progress_callback:
@@ -7252,14 +7329,15 @@ def enrich_rows_with_ai(
         # v4.16: el Negativo debe estar dirigido a la marca; la mención
         # incidental no sostiene un Negativo (caso fotomultas/Cotelco).
         sin_blanco = aplicar_regla_negativo_sin_blanco(
-            grupos, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
+            grupos_tono, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
         if sin_blanco:
             _ULTIMO_RESUMEN['tono_negativo_sin_blanco'] = sin_blanco
             if progress_callback:
                 progreso(93, 'Negativo sin blanco: %d pasaron a Neutro' % len(sin_blanco))
-        positivos = aplicar_guarda_positiva(grupos, etiquetas, brand, aliases,
-                                            voceros=cfg.get('voceros') or [])
-        tragedia = aplicar_regla_tragedia(grupos, etiquetas, brand, aliases,
+        positivos = aplicar_guarda_positiva(grupos_tono, etiquetas, brand, aliases,
+                                            voceros=cfg.get('voceros') or [],
+                                            solo_gestion=solo_gestion)
+        tragedia = aplicar_regla_tragedia(grupos_tono, etiquetas, brand, aliases,
                                           voceros=cfg.get('voceros') or [])
         if tragedia:
             _ULTIMO_RESUMEN['tono_tragedia_a_neutro'] = tragedia
@@ -7270,7 +7348,20 @@ def enrich_rows_with_ai(
         # incidental en una noticia positiva no es un Positivo (espejo de la
         # regla v4.16 para el Negativo).
         incidental = aplicar_regla_positivo_incidental(
-            grupos, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
+            grupos_tono, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [],
+            solo_gestion=solo_gestion)
+        # v1.33: condolencias, homenajes y saludos de la marca no son gestión.
+        if solo_gestion:
+            protocolo = aplicar_regla_protocolaria(
+                grupos_tono, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
+            if protocolo:
+                _ULTIMO_RESUMEN['tono_protocolario_a_neutro'] = protocolo
+                incidental = list(incidental) + list(protocolo)
+            opiniones = aplicar_regla_opinion_terceros(
+                grupos_tono, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
+            if opiniones:
+                _ULTIMO_RESUMEN['tono_opinion_terceros_a_neutro'] = opiniones
+                incidental = list(incidental) + list(opiniones)
         if incidental:
             _ULTIMO_RESUMEN['tono_positivo_incidental'] = incidental
             if progress_callback:
@@ -7379,7 +7470,7 @@ def enrich_rows_with_ai(
     _distrito = []
     if cfg.get('tono_distrito_positivo'):
         _distrito = aplicar_regla_distrito(
-            grupos, etiquetas, brand, aliases,
+            grupos_tono if tone_model is None else grupos, etiquetas, brand, aliases,
             voceros=cfg.get('voceros') or [])
     if _distrito:
         _ULTIMO_RESUMEN['tono_distrito'] = _distrito
@@ -7413,6 +7504,9 @@ def enrich_rows_with_ai(
         ajustes_fieles = unificar_rotulos_finales(
             rows, mapa, etiquetas, ajustes_fieles, km, brand=brand, aliases=aliases,
             voceros=cfg.get('voceros') or [])
+    else:
+        ajustes_fieles = unificar_variantes_rotulo_estricto(
+            rows, mapa, etiquetas, ajustes_fieles, km, brand=brand, aliases=aliases)
     _nuevos_uni = sum(1 for _i, _v in ajustes_fieles.items()
                       if _previos_uni.get(_i) != _v)
     if _nuevos_uni:
@@ -7876,7 +7970,8 @@ def aplicar_regla_negativo_sin_blanco(grupos: Sequence[dict], etiquetas: Dict[in
 
 def aplicar_regla_positivo_incidental(grupos: Sequence[dict], etiquetas: Dict[int, dict],
                                       brand: str, aliases: Sequence[str],
-                                      voceros: Sequence[str] = ()) -> List[int]:
+                                      voceros: Sequence[str] = (),
+                                      solo_gestion: bool = False) -> List[int]:
     """Calibra el Positivo: el sentimiento se evalúa hacia la marca.
 
     Baja Positivo a Neutro cuando la marca no protagoniza la noticia (mención
@@ -7914,11 +8009,147 @@ def aplicar_regla_positivo_incidental(grupos: Sequence[dict], etiquetas: Dict[in
         copia_e = dict(e, tono='Neutro')
         copia_e.pop('flags', None)
         if aplicar_guarda_positiva([copia_g], {copia_g.get('grupo'): copia_e},
-                                   brand, aliases, voceros):
+                                   brand, aliases, voceros, solo_gestion=solo_gestion):
             continue
         e['tono'] = 'Neutro'
         bajados.append(g.get('grupo'))
     return bajados
+
+
+# ============================================================================
+# v1.33 (2026-11-02, flag tono_solo_gestion): menciones que NO son de la
+# marca y menciones protocolarias. Evaluación de un dossier real de
+# Secretaría: más de 60 Positivos salían de (a) el cargo, no la entidad
+# («aspirante a la Alcaldía de Bogotá», «cuando Petro era alcalde»,
+# «durante la administración de Petro en la Alcaldía»), (b) homónimos del
+# vocero («Juan Manuel Galán») u otros alcaldes («el alcalde Cristian
+# Portilla»), y (c) condolencias o saludos del alcalde (69 notas sobre la
+# muerte de Navarro Wolff). Ninguna destaca gestión o labor: Neutro.
+# ============================================================================
+_ALC = r'Alcald[ií]a(?:\s+Mayor)?(?:\s+de\s+Bogot[aá])?'
+_CARGO_PATS = [
+    re.compile(r'\b(?:ex|pre)?candidat[oa]s?\s+(?:\w+\s+){0,3}?(?:a|para)\s+la\s+' + _ALC, re.I),
+    re.compile(r'\baspir\w*\s+(?:\w+\s+){0,3}?(?:a|para)\s+la\s+' + _ALC, re.I),
+    re.compile(r'\b(?:sucesor|sucesora|relevo|reemplazo|sucesi[oó]n)\s+(?:del?\s+)?(?:la\s+)?alcalde(?:sa)?(?:\s+[A-ZÁÉÍÓÚÑ]\w+){0,3}', re.I),
+    re.compile(r'\b(?:candidatura|aspiraci[oó]n|campa[ñn]a|carrera|elecci[oó]n(?:es)?)\s+(?:a|para|por|de)\s+la\s+' + _ALC, re.I),
+    re.compile(r'\b(?:lleg[oó]|pas[oó]|estuvo|gan[oó]|ocup[oó])\s+(?:a|por|en)\s+la\s+' + _ALC, re.I),
+    re.compile(r'\bcuando\s+(?:\w+\s+){0,3}(?:era|fue)\s+alcalde(?:\s+(?:mayor\s+)?de\s+Bogot[aá])?', re.I),
+    re.compile(r'\b(?:durante|en|desde)\s+(?:la\s+)?(?:administraci[oó]n|alcald[ií]a)\s+de\s+'
+               r'(?!Carlos\b|Fernando\b|Gal[aá]n\b)[A-ZÁÉÍÓÚÑ][\wáéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][\wáéíóúñ]+)?'
+               r'(?:\s+en\s+la\s+' + _ALC + r')?'),
+    re.compile(r'\bdesde\s+la\s+' + _ALC + r'\s+y\s+(?:\w+\s+){0,3}(?:la\s+)?Presidencia', re.I),
+]
+_PALABRAS_NO_NOMBRE = {
+    'según', 'segun', 'el', 'la', 'los', 'las', 'para', 'por', 'con', 'y', 'e', 'de', 'del',
+    'alcalde', 'mandatario', 'señor', 'senor', 'que', 'como', 'cuando', 'donde', 'pero',
+    'también', 'tambien', 'a', 'al', 'en', 'su', 'sus', 'este', 'esta', 'dijo', 'afirmó',
+}
+
+
+def _enmascarar_menciones_ajenas(texto: str, voceros: Sequence[str] = ()) -> str:
+    """Reemplaza por «XAJENAX» las menciones que no son de la marca ni de su
+    vocero: el cargo (candidaturas, exalcaldes, administraciones pasadas),
+    otros alcaldes («el alcalde Cristian Portilla», «el alcalde de Cali») y
+    homónimos del apellido del vocero («Juan Manuel Galán»). Solo se usa
+    para las reglas de tono; el Contexto analizado no cambia."""
+    t = str(texto or '')
+    if not t:
+        return t
+    for pat in _CARGO_PATS:
+        t = pat.sub(' XAJENAX ', t)
+    # Otros alcaldes: «el alcalde de X» (X != Bogotá) o «el alcalde Nombre
+    # Apellido» que no es el vocero.
+    t = re.sub(r'\b([Ee]l|[Ll]a)\s+alcalde(?:sa)?\s+de\s+(?!Bogot)[A-ZÁÉÍÓÚÑ]\w*', ' XAJENAX ', t)
+    t = re.sub(r'\b([Ee]l|[Ll]a)\s+alcalde(?:sa)?\s+(?!Carlos\b|Fernando\b|Gal[aá]n\b|[Mm]ayor\b|[Dd]istrital\b)'
+               r'[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+', ' XAJENAX ', t)
+    # Homónimos del apellido del vocero: «Juan Manuel Galán» cuando el
+    # vocero es «Carlos Fernando Galán».
+    completos = [str(v).split() for v in (voceros or []) if len(str(v).split()) >= 2]
+    sueltos = {nz(v) for v in (voceros or []) if len(str(v).split()) == 1}
+    for toks in completos:
+        apellido = toks[-1]
+        if nz(apellido) not in sueltos:
+            continue
+        nombres = {nz(x) for x in toks[:-1]}
+
+        def _sub(m):
+            previas = m.group(1).split()
+            if any(nz(w) in nombres for w in previas) or all(nz(w) in _PALABRAS_NO_NOMBRE for w in previas):
+                return m.group(0)
+            return ' XAJENAX '
+        t = re.sub(r'\b((?:[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+\s+){1,2})' + re.escape(apellido) + r'\b', _sub, t)
+    return t
+
+
+_PROTOCOLO_PAT = re.compile(
+    r'\b(condolenci\w*|p[eé]same|lament\w*|pesar|despid\w*|despedi\w*|fallec\w*|muri[oó]|'
+    r'muerte|q\.?\s?e\.?\s?p\.?\s?d|homenaj\w*|minuto de silencio|felicit\w*|salud[oó]|'
+    r'cumplea[ñn]os|recuerd\w*|record[oó]|luto|duelo|solidaridad|acompa[ñn]amos)\b', re.I)
+
+
+_NOTICIA_PROTOCOLO_PAT = re.compile(
+    r'\b(fallec\w*|falleci[oó]|muri[oó]|muere|muerte|despid\w*|despedida|condolenci\w*|'
+    r'p[eé]same|luto|duelo|homenaje\s+p[oó]stumo|exequias|sepelio|velorio|q\.?\s?e\.?\s?p\.?\s?d)\b', re.I)
+
+
+def aplicar_regla_protocolaria(grupos, etiquetas, brand, aliases, voceros=()):
+    """v1.33 (tono_solo_gestion): Positivo -> Neutro cuando TODAS las
+    oraciones en que aparece la marca o su vocero son protocolarias
+    (condolencias, pésame, homenajes, saludos, recuerdos) y la marca no es
+    sujeto de ninguna gestión. Ejemplo: «El alcalde Galán lamentó la muerte
+    de Navarro Wolff y recordó su paso por la Secretaría de Gobierno».
+    Marca el Neutro como pegajoso. Devuelve los grupos corregidos."""
+    actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
+               if x and len(nz(x)) >= 4]
+    corregidos = []
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or e.get('tono') != 'Positivo':
+            continue
+        texto = '%s. %s' % (g.get('titulo') or '', g.get('contexto') or g.get('texto') or '')
+        oraciones = [o for o in re.split(r'(?<=[.!?;:])\s+|\n+', ctrl(texto))
+                     if any(a in nz(o) for a in actores)]
+        if not oraciones:
+            continue
+        # Protocolaria si cada oración de la marca lo es, o si la NOTICIA es
+        # un fallecimiento/despedida/homenaje (titular o contexto): ahí las
+        # palabras del alcalde («fue ejemplo de reconciliación») son una
+        # reacción, no una gestión, aunque no digan «condolencias».
+        noticia_protocolo = bool(_NOTICIA_PROTOCOLO_PAT.search(
+            '%s %s' % (texto, str(g.get('texto') or '')[:1500])))
+        if not noticia_protocolo and not all(_PROTOCOLO_PAT.search(o) for o in oraciones):
+            continue
+        if _marca_sujeto_de_gestion(texto, actores):
+            continue
+        e['tono'] = 'Neutro'
+        e.setdefault('flags', {})['neutro_pegajoso'] = True
+        corregidos.append(g.get('grupo'))
+    return corregidos
+
+
+_PREOCUPACION_PAT = re.compile(
+    r'\b(preocup\w*|responsabilidad|responsabiliz\w*|cuestion\w*|critic\w*|irregular\w*|'
+    r'hallazgos?|deficien\w*|retras\w*|incumpl\w*|reclam\w*|denunci\w*|alert[oó]|advirti[oó]|'
+    r'exig\w*|pidi[oó] explicaciones|falt[ao] de)\b', re.I)
+
+
+def aplicar_regla_opinion_terceros(grupos, etiquetas, brand, aliases, voceros=()):
+    """v1.33 (tono_solo_gestion): una Opinión de terceros con preocupación,
+    reclamo o crítica sobre la marca no es Positivo (caso real: un edil
+    preocupado por la URI de Suba, que señala la responsabilidad del
+    gobierno distrital, salía Positivo). Baja a Neutro; el Negativo lo decide
+    el modelo con el criterio. Devuelve los grupos corregidos."""
+    corregidos = []
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or e.get('tono') != 'Positivo' or e.get('tipo') != 'Opinión de terceros':
+            continue
+        texto = '%s. %s' % (g.get('titulo') or '', g.get('contexto') or g.get('texto') or '')
+        if _PREOCUPACION_PAT.search(texto):
+            e['tono'] = 'Neutro'
+            e.setdefault('flags', {})['neutro_pegajoso'] = True
+            corregidos.append(g.get('grupo'))
+    return corregidos
 
 
 def aplicar_guarda_tono(grupos: Sequence[dict], etiquetas: Dict[int, dict],
@@ -8084,7 +8315,7 @@ def _atencion_paciente_en_marca(texto: str, brand: str,
 
 def aplicar_guarda_positiva(grupos: Sequence[dict], etiquetas: Dict[int, dict],
                             brand: str, aliases: Sequence[str],
-                            voceros: Sequence[str] = ()) -> List[int]:
+                            voceros: Sequence[str] = (), solo_gestion: bool = False) -> List[int]:
     """Sube Neutro a Positivo solo cuando la marca es autora del hecho favorable.
 
     Evita el sesgo opuesto del modelo pequeño: una marca mencionada en una nota
@@ -8153,7 +8384,10 @@ def aplicar_guarda_positiva(grupos: Sequence[dict], etiquetas: Dict[int, dict],
             es_columna_vocero = bool(voceros_norm and any(v in n for v in voceros_norm)
                                      and (re.search(r'^\s*(por|de)\s+', oracion, re.I)
                                           or re.search(r'(columna|opini[oó]n|an[aá]lisis|intervenci[oó]n|art[ií]culo)', oracion, re.I)))
-            if es_columna_vocero:
+            # v1.33 (tono_solo_gestion): Positivo solo si se destaca una
+            # gestión o labor; que el vocero hable o firme una columna no basta
+            # (condolencias, opiniones, declaraciones sobre otros temas).
+            if es_columna_vocero and not solo_gestion:
                 e['tono'] = 'Positivo'
                 corregidos.append(g.get('grupo'))
                 break
@@ -8161,7 +8395,7 @@ def aplicar_guarda_positiva(grupos: Sequence[dict], etiquetas: Dict[int, dict],
             # del actor ("consideró el rector de la Universidad Simón Bolívar").
             # No aplica si la oración trae petición o crítica (ya filtradas
             # arriba): una declaración en contexto adverso no suma.
-            m_habla = HABLA_PAT.search(n)
+            m_habla = None if solo_gestion else HABLA_PAT.search(n)
             if m_habla and not tragedia_sin_accion:
                 ventana = n[max(0, m_habla.start() - 90):m_habla.end() + 70]
                 if any(a in ventana for a in actores):
@@ -8447,6 +8681,10 @@ def aplicar_regla_distrito(grupos, etiquetas, brand, aliases, voceros=()):
         if any(s in nt for s in _DISTRITO_CORRUPCION_STEMS):
             continue
         if e.get('tono') == 'Positivo':
+            continue
+        # v1.33: una opinión de terceros sobre un proyecto no es gestión
+        # destacada de la marca (caso real: edil preocupado por la URI).
+        if e.get('tipo') == 'Opinión de terceros' or e.get('genero') in ('Opinión', 'Editorial'):
             continue
         if _DECRETO_PAT.search(nt) and not _decreto_de_alcaldia(completo, actores):
             continue
