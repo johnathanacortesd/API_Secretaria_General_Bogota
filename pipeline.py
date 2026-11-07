@@ -883,7 +883,7 @@ def _url_link_ext(row) -> str:
 
 _EDITORIAL_URL_STEMS = ('editorial',)
 _REPORTAJE_URL_STEMS = ('reportaje', 'especial', 'investigacion')
-_OPINION_URL_STEMS = ('opinion', 'columna')
+_OPINION_URL_STEMS = ('opinion', 'columna', 'columnist')
 
 
 def aplicar_genero_por_url(rows) -> int:
@@ -917,6 +917,49 @@ def aplicar_genero_por_url(rows) -> int:
             cambios += 1
         elif any(s in url for s in _OPINION_URL_STEMS):
             row['GÉNERO'] = 'Opinión'
+            cambios += 1
+    return cambios
+
+
+def _norm_simple(s) -> str:
+    return unidecode(str(s or "")).lower()
+
+
+def aplicar_opinion_haiku(rows, brand="", aliases=(), voceros=()) -> int:
+    """Regla de opinión del usuario en modo Claude Haiku (solo con el flag
+    clasificar_tipo_genero). Corre DESPUÉS de los rescates de siempre y,
+    a diferencia de ellos (que solo suben desde Noticia), GANA sobre el
+    modelo cuando dispara:
+      - Web Ext con "opinion"/"columna"/"columnist", o Sección - Programa
+        con opinión/columna/columnistas => GÉNERO Opinión. El nombre del
+        diario La Opinión (laopinion) y "desopinion" no cuentan.
+      - "editorial" en la URL o la Sección => GÉNERO Editorial (mismo
+        orden Editorial antes que Opinión del camino OpenAI).
+      - Con Opinión por regla, TIPO = Opinión de terceros salvo Ranking o
+        que el Autor - Conductor sea la marca, un alias o un vocero.
+    No toca duplicadas ('-') ni filas sin GÉNERO. Devuelve filas cambiadas."""
+    propios = [_norm_simple(x) for x in [brand] + list(aliases or []) + list(voceros or [])
+               if x and len(_norm_simple(x)) >= 4]
+    cambios = 0
+    for row in rows:
+        if row.get('is_duplicate') or (row.get('GÉNERO') or '') in ('', '-'):
+            continue
+        url = _quitar_nombre_la_opinion(_norm_simple(_url_web_ext(row)))
+        sec = _quitar_nombre_la_opinion(_norm_simple(row.get('Sección - Programa')))
+        evidencia = url + ' ' + sec
+        if 'editorial' in evidencia:
+            nuevo = 'Editorial'
+        elif any(s in evidencia for s in _OPINION_URL_STEMS):
+            nuevo = 'Opinión'
+        else:
+            continue
+        antes = (row.get('GÉNERO'), row.get('TIPO'))
+        row['GÉNERO'] = nuevo
+        if nuevo == 'Opinión' and row.get('TIPO') != 'Ranking':
+            autor = _norm_simple(row.get('Autor - Conductor'))
+            if not any(p in autor for p in propios):
+                row['TIPO'] = 'Opinión de terceros'
+        if (row.get('GÉNERO'), row.get('TIPO')) != antes:
             cambios += 1
     return cambios
 
@@ -1944,6 +1987,13 @@ def process_dossier(
     # pasa a Entrevista. Corre después del rescate por URL y con la misma
     # guarda (solo sube Noticia); lo demás no cambia.
     aplicar_genero_por_frase_entrevista(rows)
+
+    # Modo Claude Haiku + Secretaría: la regla de opinión (URL / Sección)
+    # gana sobre el modelo y fija TIPO Opinión de terceros.
+    if motor == "haiku" and has_ai and ai_extra.get("clasificar_tipo_genero"):
+        aplicar_opinion_haiku(rows, ai_config.get("brand") or "",
+                              ai_config.get("aliases") or [],
+                              ai_extra.get("voceros") or ai_config.get("voceros") or [])
 
     # v1.18/v1.14: FECHA INFORME siempre es la fecha de procesamiento
     # (Bogotá), en cualquier camino que la exporte — no solo en formato

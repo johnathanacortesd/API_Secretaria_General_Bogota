@@ -39,6 +39,14 @@ MIN_CTX = 120
 GRUPOS_POR_PAGINA = 30
 TOPE_CTX_GRUPO = 300
 TONOS = ("Positivo", "Neutro", "Negativo")
+# TIPO y GÉNERO: solo con el flag clasificar_tipo_genero del perfil (Secretaría).
+# Literales exactos de las definiciones del usuario.
+TIPOS = ("Institucional", "Información general", "Programas y proyectos",
+         "Opinión de terceros", "Ranking")
+GENEROS = ("Noticia", "Reportaje", "Opinión", "Entrevista", "Editorial")
+# (clave del item, clave que ve el modelo)
+CAMPOS_CORTOS = (("seccion", "seccion_programa"), ("tipo_medio", "tipo_medio"), ("medio", "medio"))
+TOPE_CORTO = 80
 
 # Progreso para la app (las tools corren en este mismo proceso).
 PROGRESO: Dict[str, Any] = {}
@@ -89,7 +97,8 @@ def _avisar(pct: int, msg: str) -> None:
 
 def preparar_estado(items: Sequence[dict], incluir_tema: bool,
                     taxonomia: Optional[Sequence[str]] = None,
-                    progreso_cb: Optional[Callable[[int, str], None]] = None) -> None:
+                    progreso_cb: Optional[Callable[[int, str], None]] = None,
+                    con_tipo_genero: bool = False) -> None:
     """Carga los items en memoria. Cada item: {id, titulo, contexto, duplicado_de?}.
 
     `duplicado_de` (opcional) marca un duplicado explícito; además, los títulos
@@ -106,6 +115,9 @@ def preparar_estado(items: Sequence[dict], incluir_tema: bool,
         orden.append(fid)
         titulo = str(it.get("titulo") or "")
         datos[fid] = {"id": fid, "titulo": titulo, "contexto": str(it.get("contexto") or "")}
+        for clave_item, _ in CAMPOS_CORTOS:
+            datos[fid][clave_item] = str(it.get(clave_item) or "").strip()
+        datos[fid]["url_opinion"] = bool(it.get("url_opinion"))
         dup = it.get("duplicado_de")
         if dup not in (None, "") and str(dup) != fid:
             hereda[fid] = str(dup)
@@ -120,6 +132,7 @@ def preparar_estado(items: Sequence[dict], incluir_tema: bool,
     _ESTADO.clear()
     _ESTADO.update(orden=orden, datos=datos, hereda=hereda, explicitos=explicitos, res={},
                    incluir_tema=bool(incluir_tema), taxonomia=tax,
+                   con_tipo_genero=bool(con_tipo_genero),
                    tax_norm={_simple(t): t for t in tax}, progreso_cb=progreso_cb)
     PROGRESO.clear()
     PROGRESO.update(paso="Clasificando", total=len(orden) - len(hereda), leidas=0,
@@ -149,7 +162,8 @@ def _faltantes() -> List[str]:
         if fid in _ESTADO["hereda"]:
             continue
         r = res.get(fid) or {}
-        if not r.get("tono") or not r.get("subtema") or (incluir and not r.get("tema")):
+        if not r.get("tono") or not r.get("subtema") or (incluir and not r.get("tema")) \
+                or (_ESTADO.get("con_tipo_genero") and not (r.get("tipo") and r.get("genero"))):
             out.append(fid)
     return out
 
@@ -168,6 +182,12 @@ async def _leer_noticias(args: Dict[str, Any]) -> Dict[str, Any]:
             reg["igual_a"] = _raiz(fid)
         else:
             reg["contexto"] = d["contexto"][:TOPE_TEXTO]
+            if _ESTADO.get("con_tipo_genero"):
+                for clave_item, clave_salida in CAMPOS_CORTOS:
+                    if d.get(clave_item):
+                        reg[clave_salida] = d[clave_item][:TOPE_CORTO]
+                if d.get("url_opinion"):
+                    reg["url_contiene_opinion"] = True
         salida.append(reg)
     desde = max(0, int(args.get("desde") or 0))
     pagina = salida[desde:desde + POR_PAGINA]
@@ -199,6 +219,12 @@ async def _guardar_clasificacion(args: Dict[str, Any]) -> Dict[str, Any]:
             if fuera:
                 raise ValueError("tema fuera de la lista en ids %s: elige uno de %s"
                                  % (fuera[:10], list(tax.values())))
+        if _ESTADO.get("con_tipo_genero"):
+            for campo, validos in (("tipo", TIPOS), ("genero", GENEROS)):
+                malos = [i for i, f in nuevas.items() if f.get(campo) and f[campo] not in validos]
+                if malos:
+                    raise ValueError("%s inválido en ids %s: usa exactamente uno de %s"
+                                     % (campo, malos[:10], list(validos)))
     except Exception as e:  # noqa: BLE001 - el error vuelve como contexto
         return _texto("Error guardando: %s" % e, error=True)
 
@@ -214,6 +240,10 @@ async def _guardar_clasificacion(args: Dict[str, Any]) -> Dict[str, Any]:
         if _ESTADO["incluir_tema"]:
             t = str(f.get("tema") or "").strip() or antes.get("tema", "")
             ahora["tema"] = _ESTADO["tax_norm"].get(_simple(t), t) if t else ""
+        if _ESTADO.get("con_tipo_genero"):
+            # Las correcciones del revisor no traen tipo/genero: se conservan.
+            ahora["tipo"] = f.get("tipo") or antes.get("tipo", "")
+            ahora["genero"] = f.get("genero") or antes.get("genero", "")
         cambios += bool(antes.get("subtema")) and any(antes.get(k) != v for k, v in ahora.items())
         res[fid] = ahora
     _propagar()
@@ -361,6 +391,40 @@ No tienes terminal ni puedes leer ni escribir archivos.
 Al terminar responde en una sola línea: filas clasificadas y cuántas por tono. Paras cuando no falten filas y la revisión haya terminado.
 </formato_de_salida>"""
 
+BLOQUE_TIPO_GENERO = """
+<tipo_y_genero>
+En este pedido cada noticia lleva también TIPO y GÉNERO; guárdalos en "tipo" y "genero" con guardar_clasificacion, escritos EXACTAMENTE como aquí (tildes y mayúsculas incluidas).
+
+TIPO (Tipo de información), exactamente uno de:
+- Institucional: información sobre la entidad directamente, por ejemplo nombramientos, presupuesto, ampliación, cambio de sede.
+- Información general: información que solo menciona a la entidad, o que no cumple los criterios de otra categoría.
+- Programas y proyectos: la gestión de la entidad, sus programas, proyectos, subsidios, jornadas de acompañamiento, la labor de la entidad.
+- Opinión de terceros: opiniones sobre la marca de personas que no hacen parte de la entidad.
+- Ranking: la marca aparece en rankings o listados de posicionamiento.
+
+GÉNERO (Género de información, el género periodístico), exactamente uno de: Noticia, Reportaje, Opinión, Entrevista, Editorial.
+- Opinión: columna o texto de opinión firmado. Si "url_contiene_opinion" es true, o "seccion_programa" es una sección de opinión o de columnas (Opinión, Columnistas, Columna), el GÉNERO es Opinión. El diario La Opinión (laopinion) NO es una sección de opinión.
+- Editorial: la voz institucional del medio (sección Editorial).
+- Entrevista: diálogo de preguntas y respuestas.
+- Reportaje: crónica, investigación o especial extenso con varias fuentes.
+- Noticia: en cualquier otro caso, y siempre que dudes.
+Cuando el GÉNERO es Opinión y quien opina no hace parte de la entidad, el TIPO normalmente es Opinión de terceros.
+Las mismas noticias del mismo hecho llevan el mismo TIPO.
+</tipo_y_genero>"""
+
+TIPO_GENERO_TOOL = ',"tipo":"%s","genero":"%s"' % ("|".join(TIPOS), "|".join(GENEROS))
+
+
+def system_prompt(con_tipo_genero: bool = False) -> str:
+    """El system prompt base; con el flag de Secretaría suma el bloque TIPO/GÉNERO."""
+    if not con_tipo_genero:
+        return SYSTEM_PROMPT
+    base = SYSTEM_PROMPT.replace(
+        '"tono":"Positivo|Neutro|Negativo","tema":"…"}]',
+        '"tono":"Positivo|Neutro|Negativo","tema":"…"%s}]' % TIPO_GENERO_TOOL)
+    return base.replace("\n<herramientas>", BLOQUE_TIPO_GENERO + "\n\n<herramientas>", 1)
+
+
 PROMPT_REVISOR = (
     "Eres revisor de consistencia de una clasificación de noticias en español. Recibes un rango de "
     "grupos (desde y cuántos) y quizá un CRITERIO DEL TONO. Lee los grupos con "
@@ -418,7 +482,8 @@ def _servidor(sdk):
         {"desde": int})(_leer_noticias)
     guardar = sdk.tool(
         "guardar_clasificacion",
-        "Guarda subtema, tono (Positivo|Neutro|Negativo) y tema (si se pidió). 'filas_json': lista "
+        "Guarda subtema, tono (Positivo|Neutro|Negativo), tema (si se pidió) y tipo/genero (si el "
+        "pedido trae <tipo_y_genero>; valores exactos de esa lista). 'filas_json': lista "
         'JSON [{"id":"1","subtema":"...","tono":"Neutro","tema":"..."}]. Se puede llamar por tandas. '
         "Devuelve cuántas filas faltan.",
         {"filas_json": str})(_guardar_clasificacion)
@@ -432,10 +497,11 @@ def _servidor(sdk):
                                      tools=[leer, guardar, candidatos])
 
 
-def construir_opciones(sdk, cwd: str, max_turns: int, max_budget_usd: float, modelo: str):
+def construir_opciones(sdk, cwd: str, max_turns: int, max_budget_usd: float, modelo: str,
+                       con_tipo_genero: bool = False):
     return sdk.ClaudeAgentOptions(
         model=modelo,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt(con_tipo_genero),
         allowed_tools=["mcp__medios__leer_noticias", "mcp__medios__guardar_clasificacion",
                        "mcp__medios__candidatos_consistencia", "Agent"],
         mcp_servers={"medios": _servidor(sdk)},
@@ -507,7 +573,7 @@ def clasificar_con_haiku(items: Sequence[dict], brand: str, aliases: Sequence[st
                          progreso_cb: Optional[Callable[[int, str], None]] = None,
                          guia_subtema: str = "", modelo: str = MODELO_HAIKU,
                          max_turns: int = 0, max_budget_usd: float = 0.0,
-                         query_fn=None) -> Dict[str, Any]:
+                         query_fn=None, clasificar_tipo_genero: bool = False) -> Dict[str, Any]:
     """Clasifica `items` ({id, titulo, contexto, duplicado_de?}) con el agente Haiku.
 
     Devuelve {"etiquetas": {id: {"tono","subtema"[, "tema"]}}, "costo_usd", "turnos",
@@ -525,14 +591,16 @@ def clasificar_con_haiku(items: Sequence[dict], brand: str, aliases: Sequence[st
     max_turns = max_turns or (2 * paginas + 14)
     max_budget_usd = max_budget_usd or round(min(5.0, 0.10 + 0.004 * n), 2)
     with _CANDADO:
-        preparar_estado(items, incluir_tema, taxonomia, progreso_cb)
+        preparar_estado(items, incluir_tema, taxonomia, progreso_cb,
+                        con_tipo_genero=clasificar_tipo_genero)
         if not items:
             return {"etiquetas": {}, "costo_usd": 0.0, "turnos": 0, "filas": 0, "faltan": 0,
                     "cambios_revision": 0, "grupos_revision": 0, "subtype": None, "error": None}
         prompt = armar_prompt(brand, list(aliases or []), list(voceros or []), criterio_texto,
                               incluir_tema, _ESTADO["taxonomia"], guia_subtema)
         with tempfile.TemporaryDirectory(prefix="motor_haiku_") as cwd:
-            opciones = construir_opciones(sdk, cwd, max_turns, max_budget_usd, modelo)
+            opciones = construir_opciones(sdk, cwd, max_turns, max_budget_usd, modelo,
+                                          con_tipo_genero=clasificar_tipo_genero)
             _avisar(75, "Clasificando con Claude Haiku (agente + revisor)…")
             final = _ejecutar(_correr(sdk, prompt, opciones, query_fn))
         _propagar()

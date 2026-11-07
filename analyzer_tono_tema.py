@@ -2138,7 +2138,8 @@ def aplicar_genero_por_seccion(rows, mapa, etiquetas, km):
                 e["genero"] = "Reportaje"
                 cambios += 1
                 break
-            if "opinion" in sec or "columna" in sec:
+            # "columnist": "Columnistas" no contiene "columna".
+            if "opinion" in sec or "columna" in sec or "columnist" in sec:
                 e["genero"] = "Opinión"
                 cambios += 1
                 break
@@ -7936,23 +7937,32 @@ def aplicar_subtemas_fijos(grupos, etiquetas, reglas):
 
 
 def _etiquetar_con_haiku(cfg: dict, grupos: List[dict], candidatos_tax: Sequence[str],
-                         incluir_tema: bool, progreso: Callable[[int, str], None]):
+                         incluir_tema: bool, progreso: Callable[[int, str], None],
+                         rows: Optional[List[dict]] = None, km: Optional[dict] = None):
     """Etiquetado de grupos con el agente Claude Haiku (motor_haiku.py).
 
-    Devuelve (etiquetas {gid: {'sub_tema','tono'}}, temas {gid: tema}, info).
+    Devuelve (etiquetas {gid: {'sub_tema','tono'[,'tipo','genero']}}, temas {gid: tema}, info).
     Es el reemplazo de `etiquetar_grupos` en modo haiku: todo lo demás del
     analizador (guardas deterministas, unificaciones, volcado) corre igual.
+    Con el flag clasificar_tipo_genero (Secretaría) también pide TIPO y
+    GÉNERO, con los mismos respaldos y la misma guardia de Entrevista que
+    el camino OpenAI; los rescates por Sección/URL/Ranking corren después.
     """
     import motor_haiku
+    con_tg = bool(cfg.get('clasificar_tipo_genero'))
     criterio_texto = (cfg.get('criterio_texto') or '').strip()         or str(CRITERIOS_TONO.get(cfg.get('criterio') or '', '') or '')
-    items = [{'id': str(g['grupo']), 'titulo': g.get('titulo') or '',
+    items = []
+    for g in grupos:
+        it = {'id': str(g['grupo']), 'titulo': g.get('titulo') or '',
               'contexto': g.get('contexto_marca') or g.get('contexto') or g.get('texto') or ''}
-             for g in grupos]
+        if con_tg and rows:
+            it.update(_campos_tipo_genero_haiku(rows, g.get('idxs') or [], km or {}))
+        items.append(it)
     res = motor_haiku.clasificar_con_haiku(
         items, cfg.get('brand') or '', cfg.get('aliases') or [], cfg.get('voceros') or [],
         criterio_texto=criterio_texto, incluir_tema=incluir_tema,
         taxonomia=list(candidatos_tax or []) or None, progreso_cb=progreso,
-        guia_subtema=cfg.get('guia_subtema') or '')
+        guia_subtema=cfg.get('guia_subtema') or '', clasificar_tipo_genero=con_tg)
     if res.get('error') and not res.get('etiquetas'):
         raise RuntimeError('El motor Claude Haiku falló: %s' % res['error'])
     etiquetas: Dict[int, dict] = {}
@@ -7961,10 +7971,39 @@ def _etiquetar_con_haiku(cfg: dict, grupos: List[dict], candidatos_tax: Sequence
         e = (res.get('etiquetas') or {}).get(str(g['grupo'])) or {}
         tono = e.get('tono') if e.get('tono') in TONOS else 'Neutro'
         etiquetas[g['grupo']] = {'sub_tema': sq(e.get('subtema') or ''), 'tono': tono}
+        if con_tg:
+            # Mismo canónico que OpenAI ("Programas y proyectos" -> literal
+            # publicado "Proyectos y programas") y mismos respaldos.
+            etiquetas[g['grupo']]['tipo'] = _canon_tipo_genero(e.get('tipo'), TIPOS_VALIDOS) or TIPO_DEFECTO
+            etiquetas[g['grupo']]['genero'] = _canon_tipo_genero(e.get('genero'), GENEROS_VALIDOS) or GENERO_DEFECTO
         if incluir_tema and e.get('tema'):
             temas[g['grupo']] = sq(e['tema'])
+    if con_tg:
+        aplicar_guardia_genero(grupos, etiquetas)
     res['modelo'] = motor_haiku.MODELO_HAIKU
     return etiquetas, temas, res
+
+
+def _campos_tipo_genero_haiku(rows: List[dict], idxs: Sequence[int], km: dict) -> dict:
+    """Campos cortos para TIPO/GÉNERO en modo haiku: Sección - Programa,
+    Tipo de Medio, Medio (de la primera fila del grupo que los traiga) y
+    si la URL web contiene opinión/columna (sin contar el nombre del
+    diario La Opinión ni "desopinion")."""
+    sec_col = km.get('seccion_programa', 'Sección - Programa')
+    out = {'seccion': '', 'tipo_medio': '', 'medio': '', 'url_opinion': False}
+    for i in idxs:
+        if i >= len(rows):
+            continue
+        r = rows[i]
+        for clave, col in (('seccion', sec_col), ('tipo_medio', km.get('tipodemedio', 'Tipo de Medio')),
+                           ('medio', km.get('medio', 'Medio'))):
+            v = str(r.get(col) or '').strip()
+            if not out[clave] and v and v.lower() not in ('nan', 'none'):
+                out[clave] = v
+        url = _quitar_nombre_la_opinion(str(r.get('URL Nota') or r.get('Web Ext') or '').lower())
+        if any(s in url for s in ('opinion', 'columna', 'columnist')):
+            out['url_opinion'] = True
+    return out
 
 
 def enrich_rows_with_ai(
@@ -8079,7 +8118,7 @@ def enrich_rows_with_ai(
     temas_haiku: Dict[int, str] = {}
     if haiku:
         etiquetas, temas_haiku, info_haiku = _etiquetar_con_haiku(
-            cfg, grupos, candidatos_tax, incluir_tema, progreso)
+            cfg, grupos, candidatos_tax, incluir_tema, progreso, rows=rows, km=km)
     else:
         etiquetas = etiquetar_grupos(cfg, grupos, progreso, tam_lote=tam_lote, workers=workers,
                                      votos=votos, uso=uso)
