@@ -76,7 +76,7 @@ Streamlit) y la interfaz en `app.py` (`render_resumen_tab`).
 
 En la pestaña estándar, «Motor de clasificación» ofrece dos opciones:
 
-- **OpenAI (actual)**: el motor de siempre (gpt-6-luna + Jev + PKL). Es el valor por defecto y no cambia.
+- **OpenAI Luna**: el motor anterior (gpt-6-luna + Jev + PKL). Opcional; **Claude Haiku es el valor por defecto**.
 - **Claude Haiku (agente + revisor)**: un agente Claude Haiku (`motor_haiku.py`, Claude Agent SDK) clasifica Tono_IA, Subtema_IA y, si se pide, Tema_IA (de la lista de Temas cuando se elige una). Al final un subagente `revisor-subtemas` revisa la consistencia. La limpieza, el Contexto analizado, el agrupamiento, las guardas deterministas de tono y subtema y el layout del Excel son los mismos. No usa PKL ni Jev.
 
 Con el perfil de la Secretaría (`clasificar_tipo_genero`), el motor Haiku también llena **TIPO** (Institucional, Información general, Programas y proyectos, Opinión de terceros, Ranking) y **GÉNERO** (Noticia, Reportaje, Opinión, Entrevista, Editorial), en las mismas columnas que OpenAI. El agente recibe Sección - Programa, Tipo de Medio, Medio y si la Web Ext contiene "opinion"; los duplicados heredan. Después corren las mismas reglas deterministas del camino OpenAI (guardia de Entrevista, Sección, URL, Ranking, TIPO por actor) y una regla final propia de Haiku que gana sobre el modelo: Web Ext o Sección con opinión/columna/columnistas da GÉNERO Opinión y TIPO Opinión de terceros (salvo Ranking o autor de la entidad); "editorial" da Editorial; laopinion y desopinion no cuentan.

@@ -592,21 +592,21 @@ def main():
 
                 # Motor de clasificación (fuera del formulario para que oculte
                 # al instante los controles que solo aplican a OpenAI).
-                _MOTORES = ["OpenAI (actual)", "Claude Haiku (agente + revisor)"]
+                _MOTORES = ["Claude Haiku (agente + revisor)", "OpenAI Luna (gpt-6-luna)"]
                 motor_sel = st.radio(
                     "Motor de clasificación",
                     _MOTORES,
                     index=0,
                     horizontal=True,
                     key="motor_clasificacion",
-                    help="OpenAI es el motor actual (gpt-6-luna + Jev). Claude Haiku usa un agente "
-                         "con un revisor de subtemas; la limpieza, el Contexto analizado y las "
+                    help="Claude Haiku (por defecto) usa un agente "
+                         "con un revisor de subtemas. OpenAI Luna es el motor anterior (gpt-6-luna + Jev). La limpieza, el Contexto analizado y las "
                          "guardas deterministas son las mismas.",
                 )
-                _haiku = motor_sel == _MOTORES[1]
+                _haiku = motor_sel == _MOTORES[0]
                 if _haiku and not st.secrets.get("ANTHROPIC_API_KEY"):
                     st.error("❌ Falta configurar ANTHROPIC_API_KEY en los Secrets de Streamlit: el motor "
-                             "Claude Haiku la necesita. El motor «OpenAI (actual)» sigue disponible.")
+                             "Claude Haiku la necesita. El motor «OpenAI Luna» sigue disponible.")
                 if _haiku:
                     st.caption("Claude Haiku: Tono, Subtema y Tema los clasifica un agente Claude Haiku "
                                "con un revisor de consistencia. Se factura a la clave de Claude Platform "
@@ -785,7 +785,7 @@ def main():
                                 _clave_claude = st.secrets.get("ANTHROPIC_API_KEY")
                                 if not _clave_claude:
                                     st.error("❌ Falta configurar ANTHROPIC_API_KEY en los Secrets de Streamlit: "
-                                             "el motor Claude Haiku la necesita. Elige «OpenAI (actual)» "
+                                             "el motor Claude Haiku la necesita. Elige «OpenAI Luna» "
                                              "para procesar sin ella.")
                                     st.stop()
                                 for _otra in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_PROFILE"):

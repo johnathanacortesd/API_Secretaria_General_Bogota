@@ -27,12 +27,18 @@ class TestAppMotor(unittest.TestCase):
         self.assertEqual(len(radios), 1, 'falta el selector de motor')
         return radios[0]
 
-    def test_carga_con_openai_por_defecto(self):
-        at = _app()
+    def test_carga_con_haiku_por_defecto(self):
+        at = _app(con_clave_claude=True)
         self.assertFalse(at.exception)
         r = self._radio(at)
-        self.assertEqual(r.value, 'OpenAI (actual)')
-        self.assertIn('Claude Haiku (agente + revisor)', r.options)
+        self.assertEqual(r.value, 'Claude Haiku (agente + revisor)')
+        self.assertIn('OpenAI Luna (gpt-6-luna)', r.options)
+        self.assertFalse(any('ANTHROPIC_API_KEY' in e.value for e in at.error))
+
+    def test_luna_opcional_sin_clave_claude(self):
+        at = _app()
+        self._radio(at).set_value('OpenAI Luna (gpt-6-luna)').run()
+        self.assertFalse(at.exception)
         self.assertFalse(any('ANTHROPIC_API_KEY' in e.value for e in at.error))
 
     def test_haiku_sin_clave_muestra_error(self):
