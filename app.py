@@ -5,6 +5,7 @@ import html
 import io
 import json
 import logging
+import os
 import re
 import time
 import streamlit as st
@@ -589,6 +590,28 @@ def main():
                     st.session_state["_perfil_hora_boletin_manana"] = "1:00 p.m."
                     st.session_state["_perfil_hora_boletin_tarde"] = "6:00 p.m."
 
+                # Motor de clasificación (fuera del formulario para que oculte
+                # al instante los controles que solo aplican a OpenAI).
+                _MOTORES = ["OpenAI (actual)", "Claude Haiku (agente + revisor)"]
+                motor_sel = st.radio(
+                    "Motor de clasificación",
+                    _MOTORES,
+                    index=0,
+                    horizontal=True,
+                    key="motor_clasificacion",
+                    help="OpenAI es el motor actual (gpt-6-luna + Jev). Claude Haiku usa un agente "
+                         "con un revisor de subtemas; la limpieza, el Contexto analizado y las "
+                         "guardas deterministas son las mismas.",
+                )
+                _haiku = motor_sel == _MOTORES[1]
+                if _haiku and not st.secrets.get("ANTHROPIC_API_KEY"):
+                    st.error("❌ Falta configurar ANTHROPIC_API_KEY en los Secrets de Streamlit: el motor "
+                             "Claude Haiku la necesita. El motor «OpenAI (actual)» sigue disponible.")
+                if _haiku:
+                    st.caption("Claude Haiku: Tono, Subtema y Tema los clasifica un agente Claude Haiku "
+                               "con un revisor de consistencia. Se factura a la clave de Claude Platform "
+                               "(ANTHROPIC_API_KEY). Sin PKL ni Jev; modelo, lotes, paralelo y "
+                               "verificaciones no aplican.")
                 with st.form("main_form"):
                     st.markdown('<div class="sec-label">1. Sube el archivo de entrada</div>', unsafe_allow_html=True)
                     st.markdown("""
@@ -688,9 +711,11 @@ def main():
                         ca, cb, cc, cd = st.columns(4)
                         with ca:
                             tam_lote_input = st.slider("Grupos por llamada", 5, 30, 10, 1,
+                                                       disabled=_haiku,
                                                        help="10 es un buen punto de partida.")
                         with cb:
                             workers_input = st.slider("Llamadas en paralelo", 1, 16, 8, 1,
+                                                      disabled=_haiku,
                                                       help="Sube para dossiers grandes; más hilos, más velocidad.")
                         with cc:
                             umbral_titulo_input = st.slider("Similitud de titulares (%)", 75, 100, 92, 1,
@@ -707,17 +732,22 @@ def main():
                         cubos_objetivo_input = st.slider("Cubos objetivo cuando la lista es automática", 8, 25, 16, 1)
                         votos_input = st.slider(
                             "Verificaciones del tono por grupo", 1, 3, 2, 1,
+                            disabled=_haiku,
                             help="Cada grupo se etiqueta N veces y gana la mayoría; un empate cae a Neutro. "
                                  "Con 2 se reducen los vaivenes de los modelos pequeños; con 3 sube el costo "
                                  "una vez más.")
-                        modelo_input = st.text_input(
-                            "Modelo de IA",
-                            value="gpt-6-luna",
-                            disabled=True,
-                            key="modelo_fijo",
-                            help="Único modelo habilitado: gpt-6-luna (el más rápido y económico, "
-                                 "$0.10 por 1M tokens de entrada; ideal para dossiers de alto volumen).",
-                        )
+                        if _haiku:
+                            # Motor Claude Haiku: el modelo de OpenAI no aplica.
+                            modelo_input = "claude-haiku-5-5"
+                        else:
+                            modelo_input = st.text_input(
+                                "Modelo de IA",
+                                value="gpt-6-luna",
+                                disabled=True,
+                                key="modelo_fijo",
+                                help="Único modelo habilitado: gpt-6-luna (el más rápido y económico, "
+                                     "$0.10 por 1M tokens de entrada; ideal para dossiers de alto volumen).",
+                            )
                         st.markdown("**💾 Perfil de cliente**")
                         guardar_chk = st.checkbox(
                             "Guardar esta configuración como perfil al procesar",
@@ -751,10 +781,20 @@ def main():
                         else:
                             api_key = st.secrets.get("OPENAI_API_KEY")
                             typesafe_api_key = st.secrets.get("TYPESAFE_API_KEY")
-                            if enable_ai and not api_key:
+                            if enable_ai and _haiku:
+                                _clave_claude = st.secrets.get("ANTHROPIC_API_KEY")
+                                if not _clave_claude:
+                                    st.error("❌ Falta configurar ANTHROPIC_API_KEY en los Secrets de Streamlit: "
+                                             "el motor Claude Haiku la necesita. Elige «OpenAI (actual)» "
+                                             "para procesar sin ella.")
+                                    st.stop()
+                                for _otra in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_PROFILE"):
+                                    os.environ.pop(_otra, None)
+                                os.environ["ANTHROPIC_API_KEY"] = str(_clave_claude)
+                            elif enable_ai and not api_key:
                                 st.error("❌ Falta configurar OPENAI_API_KEY en los Secrets de Streamlit: se usa para subtema y tema.")
                                 st.stop()
-                            if enable_ai and not typesafe_api_key:
+                            if enable_ai and not _haiku and not typesafe_api_key:
                                 st.warning("Sin TYPESAFE_API_KEY la verificación de temas con Jev queda desactivada "
                                            "(es opcional); el tono, el subtema y el tema se generan igual con la API de OpenAI.")
                     
@@ -864,6 +904,7 @@ def main():
                                     "typesafe_api_key": typesafe_api_key if enable_ai else None,
                                     "typesafe_model": "jev-latest",
                                     "model": modelo_input,
+                                    "motor": "haiku" if _haiku else "openai",
                                     "historial_dir": st.secrets.get("HISTORIAL_DIR"),
                                 }
                             else:

@@ -7935,6 +7935,38 @@ def aplicar_subtemas_fijos(grupos, etiquetas, reglas):
     return cambios
 
 
+def _etiquetar_con_haiku(cfg: dict, grupos: List[dict], candidatos_tax: Sequence[str],
+                         incluir_tema: bool, progreso: Callable[[int, str], None]):
+    """Etiquetado de grupos con el agente Claude Haiku (motor_haiku.py).
+
+    Devuelve (etiquetas {gid: {'sub_tema','tono'}}, temas {gid: tema}, info).
+    Es el reemplazo de `etiquetar_grupos` en modo haiku: todo lo demás del
+    analizador (guardas deterministas, unificaciones, volcado) corre igual.
+    """
+    import motor_haiku
+    criterio_texto = (cfg.get('criterio_texto') or '').strip()         or str(CRITERIOS_TONO.get(cfg.get('criterio') or '', '') or '')
+    items = [{'id': str(g['grupo']), 'titulo': g.get('titulo') or '',
+              'contexto': g.get('contexto_marca') or g.get('contexto') or g.get('texto') or ''}
+             for g in grupos]
+    res = motor_haiku.clasificar_con_haiku(
+        items, cfg.get('brand') or '', cfg.get('aliases') or [], cfg.get('voceros') or [],
+        criterio_texto=criterio_texto, incluir_tema=incluir_tema,
+        taxonomia=list(candidatos_tax or []) or None, progreso_cb=progreso,
+        guia_subtema=cfg.get('guia_subtema') or '')
+    if res.get('error') and not res.get('etiquetas'):
+        raise RuntimeError('El motor Claude Haiku falló: %s' % res['error'])
+    etiquetas: Dict[int, dict] = {}
+    temas: Dict[int, str] = {}
+    for g in grupos:
+        e = (res.get('etiquetas') or {}).get(str(g['grupo'])) or {}
+        tono = e.get('tono') if e.get('tono') in TONOS else 'Neutro'
+        etiquetas[g['grupo']] = {'sub_tema': sq(e.get('subtema') or ''), 'tono': tono}
+        if incluir_tema and e.get('tema'):
+            temas[g['grupo']] = sq(e['tema'])
+    res['modelo'] = motor_haiku.MODELO_HAIKU
+    return etiquetas, temas, res
+
+
 def enrich_rows_with_ai(
     rows: List[dict],
     km: dict,
@@ -7994,6 +8026,18 @@ def enrich_rows_with_ai(
     if theme_model is not None:
         incluir_tema = True
     progreso = progress_callback or (lambda pct, msg: None)
+    # Motor de clasificación: "openai" (por defecto, sin cambios) o "haiku"
+    # (agente Claude Haiku, ver motor_haiku.py). En modo haiku no se usan
+    # OpenAI, Jev ni PKL: sin api_key los pases que llamarían al LLM caen a
+    # su camino determinista.
+    motor = str(extra.get('motor') or 'openai').strip().lower()
+    haiku = motor == 'haiku'
+    info_haiku: dict = {}
+    if haiku:
+        cfg['api_key'] = ''
+        cfg['typesafe_api_key'] = ''
+        tone_model = theme_model = None
+        incluir_tema = bool(extra.get('incluir_tema', True))
 
     # --- contexto de marca (funcion existente, se conserva para la columna de auditoria) ---
     progreso(71, 'Extrayendo contexto de la marca y sus variantes…')
@@ -8032,8 +8076,13 @@ def enrich_rows_with_ai(
     # `uso` acumula tokens de TODAS las llamadas OpenAI de la corrida
     # (etiquetado + reparaciones + temas) para la tarjeta de costo aprox.
     uso = {'input': 0, 'output': 0, 'llamadas': 0}
-    etiquetas = etiquetar_grupos(cfg, grupos, progreso, tam_lote=tam_lote, workers=workers,
-                                 votos=votos, uso=uso)
+    temas_haiku: Dict[int, str] = {}
+    if haiku:
+        etiquetas, temas_haiku, info_haiku = _etiquetar_con_haiku(
+            cfg, grupos, candidatos_tax, incluir_tema, progreso)
+    else:
+        etiquetas = etiquetar_grupos(cfg, grupos, progreso, tam_lote=tam_lote, workers=workers,
+                                     votos=votos, uso=uso)
     # v4.74: subtema que el etiquetador le dio a cada grupo, antes de las
     # unificaciones (la coherencia por texto lo usa para devolverle a cada
     # noticia su rótulo propio cuando una unificación la forzó).
@@ -8048,7 +8097,7 @@ def enrich_rows_with_ai(
         ajenos = reparar_subtemas_ajenos(grupos, etiquetas)
         if ajenos:
             _ULTIMO_RESUMEN['subtemas_ajenos_reparados'] = ajenos
-        extra_llm = consolidar_por_evidencia(cfg, grupos, etiquetas, uso=uso, workers=workers)
+        extra_llm = 0 if haiku else consolidar_por_evidencia(cfg, grupos, etiquetas, uso=uso, workers=workers)
     else:
         cambios = canonizar_subtemas(etiquetas)
         extra_uni = unificar_subtemas_noticias_similares(grupos, etiquetas,
@@ -8061,7 +8110,7 @@ def enrich_rows_with_ai(
         # v1.29: consolidación por hecho con la noticia a la vista (titular +
         # entrada), validada en código por fidelidad. Si el modelo no responde,
         # cae a la unificación anterior por lista de subtemas.
-        extra_llm = consolidar_hechos_llm(cfg, grupos, etiquetas, uso=uso, workers=workers)
+        extra_llm = 0 if haiku else consolidar_hechos_llm(cfg, grupos, etiquetas, uso=uso, workers=workers)
         if extra_llm is None:
             extra_llm = unificar_subtemas_llm(cfg, grupos, etiquetas, uso=uso)
         # v4.18: repara etiquetas cruzadas del modelo (el subtema de un grupo
@@ -8216,7 +8265,10 @@ def enrich_rows_with_ai(
     # Jev, ni PKL de tema). Ahorra las llamadas secuenciales de nombrar_familias_tema.
     temas: Dict[int, str] = {}
     origen: Dict[int, str] = {}
-    if incluir_tema and theme_model is None:
+    if incluir_tema and haiku:
+        temas = dict(temas_haiku)
+        origen = {gid: 'haiku' for gid in temas}
+    elif incluir_tema and theme_model is None:
         tax_lote = {'temas': candidatos_tax, 'reglas': derivar_reglas(candidatos_tax) if candidatos_tax else []}
         temas, origen = asignar_temas(cfg, grupos, etiquetas, tax_lote, progreso, uso=uso)
         corregir_temas_con_jev(cfg, grupos, etiquetas, temas, workers=workers)
@@ -8412,6 +8464,14 @@ def enrich_rows_with_ai(
                                      'llamadas': uso['llamadas']}
     _ULTIMO_RESUMEN['costo_aprox_usd'] = costo
     _ULTIMO_RESUMEN['costo_modelo'] = model
+    _ULTIMO_RESUMEN['motor'] = 'haiku' if haiku else 'openai'
+    _ULTIMO_RESUMEN.pop('haiku', None)
+    if haiku:
+        _ULTIMO_RESUMEN['costo_aprox_usd'] = round(float(info_haiku.get('costo_usd') or 0.0), 4)
+        _ULTIMO_RESUMEN['costo_modelo'] = info_haiku.get('modelo') or 'claude-haiku'
+        _ULTIMO_RESUMEN['haiku'] = {k: info_haiku.get(k) for k in (
+            'costo_usd', 'turnos', 'filas', 'faltan', 'cambios_revision',
+            'grupos_revision', 'subtype', 'error')}
     _ULTIMO_RESUMEN['costo_precios'] = {'input_por_millon': pin, 'output_por_millon': pout}
     if progress_callback:
         if incluir_tema:

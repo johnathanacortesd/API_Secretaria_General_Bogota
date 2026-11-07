@@ -1791,7 +1791,14 @@ def process_dossier(
     rows = detectar_duplicados_avanzado(rows_expanded, KEY_MAP)
 
     has_ai = bool(ai_config and ai_config.get("enabled"))
-    tone_model, theme_model = _load_optional_pkl_models(ai_config)
+    # Motor de clasificación: "openai" (actual, por defecto) o "haiku"
+    # (agente Claude Haiku, motor_haiku.py). En modo haiku no se cargan PKL
+    # ni se usa Jev: el agente hace Tono/Subtema/Tema.
+    motor = str((ai_config or {}).get("motor") or "openai").strip().lower()
+    if motor == "haiku" and has_ai:
+        tone_model, theme_model = None, None
+    else:
+        tone_model, theme_model = _load_optional_pkl_models(ai_config)
     has_pkl = tone_model is not None or theme_model is not None
     analisis = {}
     # v4.32: el forzado de incluir_tema por PKL de tema (_ai_extra_con_pkl)
@@ -1810,7 +1817,7 @@ def process_dossier(
             km=KEY_MAP,
             brand=ai_config["brand"],
             aliases=ai_config.get("aliases", []),
-            api_key=ai_config["api_key"],
+            api_key=ai_config.get("api_key") or "",
             model=ai_config.get("model", "gpt-6-luna"),
             progress_callback=progress,
             tone_model=tone_model,
