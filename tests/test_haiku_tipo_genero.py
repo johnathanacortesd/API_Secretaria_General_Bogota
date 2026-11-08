@@ -35,7 +35,7 @@ async def fake_query(prompt, options):
             VISTO.setdefault('noticias', []).append(n)
             if 'igual_a' in n:
                 continue
-            filas.append({'id': n['id'], 'subtema': 'Hecho %s' % n['id'], 'tono': 'Neutro',
+            filas.append({'id': n['id'], 'subtema': 'Hecho haiku %s' % n['id'], 'tono': 'Neutro',
                           'tipo': 'Programas y proyectos', 'genero': 'Noticia'})
         await mh._guardar_clasificacion({'filas_json': json.dumps(filas)})
         desde = pag['siguiente']
@@ -84,7 +84,7 @@ class TestMotorTipoGenero(unittest.TestCase):
     def test_categorias_invalidas_rechazadas(self):
         mh.preparar_estado(_items(), incluir_tema=False, con_tipo_genero=True)
         g = lambda f: asyncio.run(mh._guardar_clasificacion({'filas_json': json.dumps([f])}))
-        base = {'id': '1', 'subtema': 's', 'tono': 'Neutro'}
+        base = {'id': '1', 'subtema': 'Feria escolar de ciencias', 'tono': 'Neutro'}  # Clausifier: subtema válido
         self.assertTrue(g(dict(base, tipo='Proyectos', genero='Noticia')).get('is_error'))
         self.assertTrue(g(dict(base, tipo='institucional', genero='Noticia')).get('is_error'))
         self.assertTrue(g(dict(base, tipo='Ranking', genero='Columna')).get('is_error'))
@@ -92,9 +92,9 @@ class TestMotorTipoGenero(unittest.TestCase):
         ok = g(dict(base, tipo='Ranking', genero='Opinión'))
         self.assertFalse(ok.get('is_error'))
         # sin tipo/genero la fila sigue faltando
-        self.assertIn('Faltan por clasificar: 1', g({'id': '3', 'subtema': 's', 'tono': 'Neutro'})['content'][0]['text'])
+        self.assertIn('Faltan por clasificar: 1', g({'id': '3', 'subtema': 'Debate del presupuesto distrital', 'tono': 'Neutro'})['content'][0]['text'])
         # una corrección sin tipo/genero los conserva
-        g({'id': '1', 'subtema': 'otro', 'tono': 'Positivo'})
+        g({'id': '1', 'subtema': 'Otra feria escolar distrital', 'tono': 'Positivo'})
         self.assertEqual(mh._ESTADO['res']['1']['tipo'], 'Ranking')
 
 

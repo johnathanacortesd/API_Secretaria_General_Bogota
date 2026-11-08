@@ -883,6 +883,40 @@ def _url_link_ext(row) -> str:
 
 _EDITORIAL_URL_STEMS = ('editorial',)
 _REPORTAJE_URL_STEMS = ('reportaje', 'especial', 'investigacion')
+# Clausifier 2026-11-08: Reportaje por URL solo si un SEGMENTO de la ruta
+# es la sección (/reportajes/, /especiales/, /investigacion/, /cronica/).
+# Antes bastaba la subcadena, y slugs de noticias como
+# /judicial/fiscalia-abre-investigacion-contra-... o /jurisdiccion-especial-
+# para-la-paz/ salían Reportaje.
+_REPORTAJE_URL_SEG = re.compile(
+    r'/(?:reportajes?|especiales?|investigacion(?:es)?|investigativa|cronicas?|unidad-investigativa)(?:/|$|\?)')
+
+
+def _url_es_reportaje(url: str) -> bool:
+    return bool(_REPORTAJE_URL_SEG.search(str(url or '').lower()))
+
+
+def aplicar_guardia_reportaje(rows, largo_minimo: int = 4000) -> int:
+    """Clausifier 2026-11-08 (modo Haiku): GÉNERO Reportaje solo con evidencia
+    fuerte; si no, Noticia. Evidencia: URL con segmento de reportaje/
+    especial/investigación/crónica, Sección - Programa que lo diga como
+    palabra completa, o un cuerpo largo (>= `largo_minimo` caracteres).
+    Devuelve filas bajadas a Noticia."""
+    from analyzer_tono_tema import seccion_es_reportaje
+    cambios = 0
+    for row in rows:
+        if row.get('is_duplicate') or (row.get('GÉNERO') or '') != 'Reportaje':
+            continue
+        if _url_es_reportaje(_url_web_ext(row) or row.get('URL Nota') or ''):
+            continue
+        if seccion_es_reportaje(row.get('Sección - Programa')):
+            continue
+        cuerpo = str(row.get('CuerpoEs') or row.get('Texto completo') or '')
+        if len(cuerpo) >= largo_minimo:
+            continue
+        row['GÉNERO'] = 'Noticia'
+        cambios += 1
+    return cambios
 _OPINION_URL_STEMS = ('opinion', 'columna', 'columnist')
 
 
@@ -912,7 +946,7 @@ def aplicar_genero_por_url(rows) -> int:
         if any(s in url for s in _EDITORIAL_URL_STEMS):
             row['GÉNERO'] = 'Editorial'
             cambios += 1
-        elif any(s in url for s in _REPORTAJE_URL_STEMS):
+        elif _url_es_reportaje(url):
             row['GÉNERO'] = 'Reportaje'
             cambios += 1
         elif any(s in url for s in _OPINION_URL_STEMS):
@@ -1991,6 +2025,8 @@ def process_dossier(
     # Modo Claude Haiku + Secretaría: la regla de opinión (URL / Sección)
     # gana sobre el modelo y fija TIPO Opinión de terceros.
     if motor == "haiku" and has_ai and ai_extra.get("clasificar_tipo_genero"):
+        # Clausifier 2026-11-08: Reportaje solo con evidencia fuerte.
+        aplicar_guardia_reportaje(rows)
         aplicar_opinion_haiku(rows, ai_config.get("brand") or "",
                               ai_config.get("aliases") or [],
                               ai_extra.get("voceros") or ai_config.get("voceros") or [])

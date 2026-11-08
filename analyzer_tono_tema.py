@@ -269,7 +269,72 @@ def _contexto_con_titulo_y_extension(ctx_exact: str, titulo: str,
             siguiente = _oracion_siguiente_en_cuerpo(ctx_exact, cuerpo)
             if siguiente:
                 base = (base + ' ' + siguiente).strip() if base else siguiente
-    return (prefijo + base).strip()
+    return _extender_a_minimo(prefijo, base, cuerpo, titulo_limpio)
+
+
+# Clausifier 2026-11-07 (regla del usuario): Contexto analizado mide al
+# menos 403 caracteres (LARGO() de Excel = len() de Python sobre la celda).
+# Se completa con oraciones literales del cuerpo, alternando la anterior a
+# la primera mención y la posterior a la última, sin cortar oraciones ni
+# duplicar. Única excepción: el cuerpo entero es más corto.
+MIN_CONTEXTO_CARACTERES = 403
+CONTEXTO_CUERPO_CORTO = {'filas': 0}
+
+
+def _oraciones_cuerpo(cuerpo: str) -> List[str]:
+    out = []
+    for o in re.split(r'(?<=[.!?…])\s+|\r?\n+', cuerpo or ''):
+        o = re.sub(r'\s+', ' ', o).strip()
+        if o:
+            out.append(o)
+    return out
+
+
+def _extender_a_minimo(prefijo: str, base: str, cuerpo: str, titulo: str,
+                       minimo: int = MIN_CONTEXTO_CARACTERES) -> str:
+    """Extiende `prefijo + base` hasta `minimo` caracteres con oraciones
+    literales del cuerpo (antes de la primera mención / después de la
+    última, alternando). Conserva el orden original del cuerpo."""
+    actual = (prefijo + base).strip()
+    if len(actual) >= minimo:
+        return actual
+    orac = _oraciones_cuerpo(cuerpo)
+    if not orac:
+        return actual
+    base_n = re.sub(r'\s+', ' ', base or '').strip()
+    tit_n = nz(titulo or '')
+    usadas = [i for i, o in enumerate(orac) if o in base_n]
+    if usadas:
+        lo, hi = min(usadas) - 1, max(usadas) + 1
+    else:
+        lo, hi = -1, 0           # sin ancla: se completa desde el inicio
+    antes: List[str] = []
+    despues: List[str] = []
+
+    def _largo():
+        return len(' '.join(x for x in [prefijo.strip(), ' '.join(antes),
+                                        base_n, ' '.join(despues)] if x))
+
+    def _sirve(o):
+        return o not in base_n and nz(o) != tit_n
+
+    turno_antes = True
+    while _largo() < minimo and (lo >= 0 or hi < len(orac)):
+        if (turno_antes and lo >= 0) or hi >= len(orac):
+            o = orac[lo]
+            lo -= 1
+            if _sirve(o):
+                antes.insert(0, o)
+        else:
+            o = orac[hi]
+            hi += 1
+            if _sirve(o):
+                despues.append(o)
+        turno_antes = not turno_antes
+    if _largo() < minimo:
+        CONTEXTO_CUERPO_CORTO['filas'] += 1
+    return ' '.join(x for x in [prefijo.strip(), ' '.join(antes), base_n,
+                                ' '.join(despues)] if x).strip()
 
 
 def _contexto_minimo_util(ctx: str, titulo: str, texto: str) -> str:
@@ -2107,6 +2172,19 @@ def _quitar_nombre_la_opinion(s: str) -> str:
     return t
 
 
+# Clausifier 2026-11-08: la Sección marca Reportaje solo si ES la sección de
+# reportajes/especiales/crónicas/investigación (palabra completa al inicio
+# o como nombre entero), no si una sección de noticias contiene la palabra.
+_SECCION_REPORTAJE_PAT = re.compile(
+    r'^(?:reportajes?|especiales?|cronicas?|investigacion(?:es)?|unidad investigativa|informe especial)\b'
+    r'|\b(?:reportajes?|cronicas?)\b')
+
+
+def seccion_es_reportaje(seccion) -> bool:
+    sec = _quitar_nombre_la_opinion(nz(str(seccion or '')))
+    return bool(_SECCION_REPORTAJE_PAT.search(sec.strip()))
+
+
 def aplicar_genero_por_seccion(rows, mapa, etiquetas, km):
     """Rescate de columnas de opinión por la Sección del dossier: si alguna
     fila del grupo trae Sección - Programa con opinión o columna y el grupo
@@ -2133,8 +2211,9 @@ def aplicar_genero_por_seccion(rows, mapa, etiquetas, km):
                 e["genero"] = "Editorial"
                 cambios += 1
                 break
-            if ("reportaje" in sec or "especial" in sec
-                    or "investigacion" in sec or "cronica" in sec):
+            # Clausifier 2026-11-08: palabra completa de la sección, no
+            # subcadena ("Jurisdicción Especial", "Investigación judicial").
+            if seccion_es_reportaje(sec):
                 e["genero"] = "Reportaje"
                 cambios += 1
                 break
@@ -2194,6 +2273,47 @@ def aplicar_tipo_por_actor(grupos, etiquetas, brand, aliases, voceros=()):
             e['tipo'] = nuevo
             cambios += 1
     return cambios
+
+
+# Clausifier 2026-11-08: anuncio o declaración del vocero / la marca =>
+# TIPO Institucional. "El alcalde Carlos Fernando Galán anunció …" en el
+# título o al inicio del contexto, con el actor como sujeto (<=4 palabras
+# antes del verbo, misma cláusula). Excepciones: lo anunciado es un
+# programa/proyecto/jornada/subsidio/obra (queda Proyectos y programas), y
+# nunca toca Opinión de terceros ni Ranking.
+_ANUNCIO_VERBO = (r'(?:anunci[oó]|anuncia|inform[oó]|informa|asegur[oó]|asegura|afirm[oó]|afirma|'
+                  r'explic[oó]|explica|confirm[oó]|confirma|se[ñn]al[oó]|se[ñn]ala|dijo|dice|'
+                  r'declar[oó]|declara|present[oó]|presenta)')
+_PROGRAMA_PAT = re.compile(r'\b(jornadas?|programas?|proyectos?|subsidios?|obras?)\b', re.I)
+INICIO_CONTEXTO_ANUNCIO = 300
+
+
+def aplicar_tipo_institucional_anuncio(grupos, etiquetas, brand, aliases, voceros=()):
+    """Devuelve los grupos cambiados a Institucional."""
+    actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
+               if x and len(nz(x)) >= 4]
+    if not actores:
+        return []
+    mpat = '(?:' + '|'.join(re.escape(a) for a in sorted(set(actores), key=len, reverse=True)) + ')'
+    pat = re.compile(r'\b' + mpat + r'\b(?:\s+\w+){0,4}?\s+' + _ANUNCIO_VERBO + r'\b')
+    cambiados = []
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e:
+            continue
+        t = e.get('tipo')
+        if not t or t in ('Ranking', 'Opinión de terceros', 'Institucional'):
+            continue
+        titulo = str(g.get('titulo') or '')
+        inicio = str(g.get('contexto') or g.get('texto') or '')[:INICIO_CONTEXTO_ANUNCIO]
+        crudo = _enmascarar_menciones_ajenas('%s. %s' % (titulo, inicio), voceros)
+        if not any(pat.search(nz(c)) for c in re.split(r'[,.;:!?()\n]+', ctrl(crudo))):
+            continue
+        if _PROGRAMA_PAT.search('%s %s' % (titulo, inicio)):
+            continue
+        e['tipo'] = 'Institucional'
+        cambiados.append(g.get('grupo'))
+    return cambiados
 
 
 def aplicar_tipo_por_ranking(rows, mapa, etiquetas, km, brand, aliases):
@@ -7649,6 +7769,16 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
     """
     ajustes = dict(ajustes_subtema or {})
     grupo_por_id = {g.get('grupo'): g for g in grupos}
+    _haiku_mode = (cfg or {}).get('motor') == 'haiku'
+    if _haiku_mode:
+        import motor_haiku as _mh
+        _permit = _mh.rotulos_permitidos_de(
+            cfg.get('guia_subtema') or '',
+            [str((r or {}).get('subtema') or '') for r in (cfg.get('subtemas_fijos') or [])
+             if isinstance(r, dict)])
+
+        def _forma_haiku(s, tit, ctx):
+            return [] if _mh._simple(s) in _permit else _mh.problemas_subtema(s, tit, ctx)
     # Medios por grupo / por fila, desde la columna Medio del dossier.
     medios_grupo: Dict[int, set] = defaultdict(set)
     for _i, _gid in (mapa or {}).items():
@@ -7682,6 +7812,11 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
         _mal = [x for x in ('copia_titular', 'subtema_sin_hecho',
                              'verbo_inicial', 'preposicion_inicial', 'puntuacion',
                              'inicio_pronombre', 'clausula_verbal') if x in _base]
+        if _haiku_mode:
+            # Clausifier: en modo Haiku también entra el validador de forma
+            # del motor (verbo inicial en cualquier forma, extracto, 3-7).
+            _mal += _forma_haiku(_s, _g.get('titulo') or '',
+                                          _g.get('contexto_marca') or '')
         if _mal:
             # v4.63: una llamada o lista de nombres tampoco se exporta,
             # aunque no copie el titular: va a la misma reformulación.
@@ -7699,6 +7834,9 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
         _malf = [x for x in ('copia_titular', 'subtema_sin_hecho',
                               'verbo_inicial', 'preposicion_inicial', 'puntuacion',
                               'inicio_pronombre', 'clausula_verbal') if x in _basef]
+        if _haiku_mode:
+            _malf += _forma_haiku(_s, _tit, rows[_i].get('Contexto analizado') or ''
+                                           if _i < len(rows) else '')
         if _malf:
             fallos_fila.append({'grupo': 900000 + _i, 'titulo': _tit,
                                 'texto': _txt, 'sub_tema': _s,
@@ -7766,6 +7904,18 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
             for _fid, _v in _corr.items():
                 if _v.get('sub_tema'):
                     reparados[_fid] = _v['sub_tema']
+    elif _haiku_mode:
+        # Equivalente Haiku de la reformulación LLM: una llamada query()
+        # sin herramientas solo con los rótulos marcados.
+        _pedido = [dict(f, id=f['grupo'],
+                        texto=(grupo_por_id.get(f['grupo']) or {}).get('contexto_marca')
+                        or f.get('texto') or '') for f in fallos_grupo + fallos_fila]
+        for _k, _v in _mh.reformular_subtemas(_pedido).items():
+            try:
+                reparados[int(_k)] = _v
+            except ValueError:
+                pass
+        _ULTIMO_RESUMEN['haiku_reformulacion'] = dict(_mh.REFORMULACION)
     reparados_ok = 0
     sin_reparar = 0
     for _f in fallos_grupo:
@@ -7962,7 +8112,9 @@ def _etiquetar_con_haiku(cfg: dict, grupos: List[dict], candidatos_tax: Sequence
         items, cfg.get('brand') or '', cfg.get('aliases') or [], cfg.get('voceros') or [],
         criterio_texto=criterio_texto, incluir_tema=incluir_tema,
         taxonomia=list(candidatos_tax or []) or None, progreso_cb=progreso,
-        guia_subtema=cfg.get('guia_subtema') or '', clasificar_tipo_genero=con_tg)
+        guia_subtema=cfg.get('guia_subtema') or '', clasificar_tipo_genero=con_tg,
+        rotulos_permitidos=[str((r or {}).get('subtema') or '')
+                            for r in (cfg.get('subtemas_fijos') or []) if isinstance(r, dict)])
     if res.get('error') and not res.get('etiquetas'):
         raise RuntimeError('El motor Claude Haiku falló: %s' % res['error'])
     etiquetas: Dict[int, dict] = {}
@@ -8004,6 +8156,58 @@ def _campos_tipo_genero_haiku(rows: List[dict], idxs: Sequence[int], km: dict) -
         if any(s in url for s in ('opinion', 'columna', 'columnist')):
             out['url_opinion'] = True
     return out
+def guarda_final_forma_subtema(rows: List[dict], km: dict,
+                               originales: Optional[Dict[int, str]] = None) -> dict:
+    """Clausifier (modo Haiku): guarda FINAL sobre las filas volcadas. Ningún
+    Subtema_IA empieza con verbo ni copia el título. Intenta la reparación
+    determinista de forma de Grill (sin inventar palabras); lo que no se
+    puede reparar se reporta como sobreviviente en el resumen."""
+    import motor_haiku as _mh
+
+    def _malo(s, tit):
+        return _mh.empieza_con_verbo(s) or bool(
+            tit and _mh.es_copia(s, tit) in ('copia del título', 'casi igual al título',
+                                             'extracto literal del título'))
+
+    reparados, sobrevivientes = 0, []
+    cache: Dict[Tuple[str, str], str] = {}
+    # Títulos de las filas que comparten cada subtema: un rótulo tampoco
+    # puede ser el recorte del titular de OTRA fila del mismo subtema.
+    titulos_por_sub: Dict[str, List[str]] = defaultdict(list)
+    for row in rows:
+        if not row.get('is_duplicate'):
+            titulos_por_sub[str(row.get('Subtema_IA') or '').strip()].append(_titulo_fila(row, km))
+    for i, row in enumerate(rows):
+        s = str(row.get('Subtema_IA') or '').strip()
+        if row.get('is_duplicate') or not s or s == '-':
+            continue
+        tit = _titulo_fila(row, km)
+        otros = [t for t in titulos_por_sub.get(s, []) if t != tit]
+        if not _malo(s, tit) and not any(_malo(s, t) for t in otros):
+            continue
+        tit = next((t for t in [tit] + otros if _malo(s, t)), tit)
+        clave = (s, tit)
+        if clave not in cache:
+            nuevo = _reparar_forma_subtema(s)
+            w = nuevo.split()
+            while w and _mh.empieza_con_verbo(' '.join(w)):
+                w = w[1:]
+                while w and (nz(w[0]) in _ART_INICIAL or nz(w[0]) in _PREP_INICIO_ETIQUETA):
+                    w = w[1:]
+            nuevo = ' '.join(w)
+            if nuevo:
+                nuevo = nuevo[0].upper() + nuevo[1:]
+            if len(w) < 2 or _malo(nuevo, tit):
+                # Respaldo: el rótulo que Haiku le dio al grupo, si es válido.
+                orig = str((originales or {}).get(i) or '').strip()
+                nuevo = orig if (orig and not _malo(orig, tit)) else ''
+            cache[clave] = nuevo
+        if cache[clave]:
+            row['Subtema_IA'] = cache[clave]
+            reparados += 1
+        else:
+            sobrevivientes.append({'fila': i, 'subtema': s})
+    return {'reparados': reparados, 'sobrevivientes': sobrevivientes}
 
 
 def enrich_rows_with_ai(
@@ -8079,7 +8283,11 @@ def enrich_rows_with_ai(
         incluir_tema = bool(extra.get('incluir_tema', True))
 
     # --- contexto de marca (funcion existente, se conserva para la columna de auditoria) ---
+    cfg['motor'] = 'haiku' if haiku else 'openai'
+    _ULTIMO_RESUMEN.pop('haiku_reformulacion', None)
+    _ULTIMO_RESUMEN.pop('subtemas_forma_final', None)
     progreso(71, 'Extrayendo contexto de la marca y sus variantes…')
+    CONTEXTO_CUERPO_CORTO['filas'] = 0
     for row in rows:
         if row.get('is_duplicate'):
             row['Contexto analizado'] = '-'
@@ -8099,6 +8307,7 @@ def enrich_rows_with_ai(
             row['Contexto analizado'] = _contexto_con_titulo_y_extension(
                 ctx, _titulo_fila(row, km), fuente_ctx,
                 brand, aliases, cfg.get('voceros') or [])
+    _ULTIMO_RESUMEN['contexto_cuerpo_menor_403'] = CONTEXTO_CUERPO_CORTO['filas']
 
     # --- agrupacion ---
     progreso(73, 'Agrupando notas equivalentes…')
@@ -8122,6 +8331,20 @@ def enrich_rows_with_ai(
     else:
         etiquetas = etiquetar_grupos(cfg, grupos, progreso, tam_lote=tam_lote, workers=workers,
                                      votos=votos, uso=uso)
+    # Clausifier 2026-11-08: agente evaluador de agrupación (modo Haiku).
+    # Grupos candidatos por Título / Resumen / texto / Contexto analizado
+    # parecidos (rapidfuzz); el agente decide agrupar o separar ANTES de las
+    # unificaciones deterministas, y `hacer_cumplir` lo garantiza al final.
+    _eval_dec: List[dict] = []
+    _eval_estado: dict = {}
+    _ULTIMO_RESUMEN.pop('evaluador_agrupacion', None)
+    if haiku and cfg.get('evaluador_agrupacion', True):
+        import evaluador_agrupacion as _ev
+        progreso(76, 'Evaluador de agrupación: revisando grupos candidatos…')
+        _cands = _ev.construir_candidatos(rows, mapa, km, umbral_titulo, umbral_cuerpo)
+        _eval_dec = _ev.evaluar(_cands, rows, mapa, etiquetas, km)
+        _eval_estado = _ev.aplicar_inicial(_eval_dec, _cands, mapa, etiquetas)
+        _ULTIMO_RESUMEN['evaluador_agrupacion'] = dict(_ev.ULTIMO)
     # v4.74: subtema que el etiquetador le dio a cada grupo, antes de las
     # unificaciones (la coherencia por texto lo usa para devolverle a cada
     # noticia su rótulo propio cuando una unificación la forzó).
@@ -8358,6 +8581,11 @@ def enrich_rows_with_ai(
             # tiene la última palabra).
             aplicar_tipo_por_actor(grupos, etiquetas, brand, aliases,
                                    voceros=cfg.get('voceros') or [])
+        # Clausifier 2026-11-08: anuncio del vocero/marca => Institucional.
+        _inst = aplicar_tipo_institucional_anuncio(grupos, etiquetas, brand, aliases,
+                                                   voceros=cfg.get('voceros') or [])
+        if _inst:
+            _ULTIMO_RESUMEN['tipo_institucional_anuncio'] = len(_inst)
         aplicar_tipo_por_ranking(rows, mapa, etiquetas, km, brand, aliases)
 
     # v1.10: garantía FINAL y determinista (2026-10-31): mismo Título
@@ -8457,6 +8685,15 @@ def enrich_rows_with_ai(
         ajustes_subtema=ajustes_fieles,
         km=km,
     )
+    if _eval_dec:
+        # Clausifier: las decisiones del evaluador mandan sobre todas las
+        # unificaciones deterministas anteriores (por grupo y por fila).
+        _ULTIMO_RESUMEN['evaluador_agrupacion']['cumplimiento'] = _ev.hacer_cumplir(
+            _eval_dec, _eval_estado, rows, mapa)
+    if haiku:
+        # Clausifier: guarda final de forma del subtema (modo Haiku).
+        _ULTIMO_RESUMEN['subtemas_forma_final'] = guarda_final_forma_subtema(
+            rows, km, {i: subtemas_originales.get(g) or '' for i, g in mapa.items() if g})
 
     temas_lote: List[str] = []
     vistos = set()
@@ -8510,7 +8747,13 @@ def enrich_rows_with_ai(
         _ULTIMO_RESUMEN['costo_modelo'] = info_haiku.get('modelo') or 'claude-haiku'
         _ULTIMO_RESUMEN['haiku'] = {k: info_haiku.get(k) for k in (
             'costo_usd', 'turnos', 'filas', 'faltan', 'cambios_revision',
-            'grupos_revision', 'subtype', 'error')}
+            'grupos_revision', 'subtype', 'error', 'rechazos', 'marcados')}
+        _ref = _ULTIMO_RESUMEN.get('haiku_reformulacion') or {}
+        _ULTIMO_RESUMEN['costo_aprox_usd'] = round(
+            _ULTIMO_RESUMEN['costo_aprox_usd'] + float(_ref.get('costo_usd') or 0.0), 4)
+        _ULTIMO_RESUMEN['costo_aprox_usd'] = round(
+            _ULTIMO_RESUMEN['costo_aprox_usd'] + float(
+                (_ULTIMO_RESUMEN.get('evaluador_agrupacion') or {}).get('costo_usd') or 0.0), 4)
     _ULTIMO_RESUMEN['costo_precios'] = {'input_por_millon': pin, 'output_por_millon': pout}
     if progress_callback:
         if incluir_tema:

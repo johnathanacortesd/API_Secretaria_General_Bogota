@@ -50,7 +50,7 @@ async def fake_query(prompt, options):
             if 'igual_a' in n:
                 continue
             ctx = n.get('contexto') or ''
-            f = {'id': n['id'], 'subtema': 'Hecho %s' % n['id'][:20],
+            f = {'id': n['id'], 'subtema': 'Hecho haiku %s' % n['id'][:20],  # Clausifier: 3+ palabras
                  'tono': 'Positivo' if 'entrega' in ctx.lower() else 'Neutro'}
             if incluir:
                 f['tema'] = 'Gestión institucional'
@@ -122,7 +122,10 @@ class TestMotorHaiku(unittest.TestCase):
             {'filas_json': json.dumps([{'id': '1', 'subtema': 's', 'tono': 'Neutro', 'tema': 'Deportes'}])}))
         self.assertTrue(fuera.get('is_error'))
         ok = asyncio.run(mh._guardar_clasificacion(
-            {'filas_json': json.dumps([{'id': '1', 'subtema': 's', 'tono': 'Neutro', 'tema': 'educacion'}])}))
+            # Clausifier 2026-11-07: el subtema debe pasar el validador de forma
+            # (3-7 palabras, sin verbo inicial); 's' ahora se rechaza.
+            {'filas_json': json.dumps([{'id': '1', 'subtema': 'Feria escolar de ciencias',
+                                        'tono': 'Neutro', 'tema': 'educacion'}])}))
         self.assertFalse(ok.get('is_error'))
         self.assertEqual(mh._ESTADO['res']['2']['tema'], 'Educación')   # canónico y heredado
 
