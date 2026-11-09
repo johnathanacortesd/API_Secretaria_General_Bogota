@@ -4,6 +4,34 @@ App Streamlit basada en **API_2_Grill v4.67**, adaptada a un solo cliente,
 con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
+
+## Tono por rol, auditor de tono y una noticia = un subtema (portado de API_2_Grill)
+
+Se conserva todo lo que esta app ya hacía; se suma:
+
+- **Tono por rol del cliente.** El agente Haiku decide primero el papel de la
+  marca, alias o vocero en la nota (`gestion`, `logro` = Positivo; `critica`,
+  `afectacion` = Negativo; `equilibrada`, `referencial` = Neutro) y el tono
+  sale de ahí. `guardar_clasificacion` rechaza la fila si no coinciden. El
+  criterio de tono del perfil sigue mandando en los casos que nombre.
+- **Auditor de tono** (`motor_haiku.auditar_tono`): verifica los Negativos,
+  los tonos sin mención literal del cliente, los Positivos sin el cliente en
+  el título y los subtemas con tonos distintos. Se apaga con
+  `auditor_tono: false` en `ai_config`.
+- **Subagentes con contexto.** `revisor-subtemas` y `evaluador-agrupacion`
+  reciben cliente, alias, voceros y criterio en su propio pedido.
+- **Subtema preciso.** Hecho + objeto + dato distintivo, con prueba de
+  precisión; "mismo hecho" exige el mismo evento, actores, lugar y momento.
+- **Una noticia = un subtema, un tono y un tema** (`unificar_por_noticia`,
+  pase final de Grill v4.72): las noticias iguales o realmente similares
+  (mismo titular comparable, mismo CuerpoEs, pasaje literal compartido o
+  texto muy parecido) terminan con un solo subtema. Nunca une dos notas del
+  mismo molde con lugar o persona distintos.
+
+Banco de pruebas sin API (`python3 tools/banco_agrupacion.py --semillas 5`),
+86 noticias con varias notas: subtema partido 11 -> 0, fusiones de noticias
+distintas 7 -> 6, filas con un subtema correcto 86,5 % -> 91,8 %.
+
 ## Cliente y enfoque
 
 | Campo | Valor |

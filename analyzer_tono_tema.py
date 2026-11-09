@@ -38,6 +38,7 @@ import time
 import unicodedata
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import requests
@@ -8112,7 +8113,8 @@ def _etiquetar_con_haiku(cfg: dict, grupos: List[dict], candidatos_tax: Sequence
         items, cfg.get('brand') or '', cfg.get('aliases') or [], cfg.get('voceros') or [],
         criterio_texto=criterio_texto, incluir_tema=incluir_tema,
         taxonomia=list(candidatos_tax or []) or None, progreso_cb=progreso,
-        guia_subtema=cfg.get('guia_subtema') or '', clasificar_tipo_genero=con_tg,
+        guia_subtema=cfg.get('guia_subtema') or '',
+        auditor_tono=bool(cfg.get('auditor_tono', True)), clasificar_tipo_genero=con_tg,
         rotulos_permitidos=[str((r or {}).get('subtema') or '')
                             for r in (cfg.get('subtemas_fijos') or []) if isinstance(r, dict)])
     if res.get('error') and not res.get('etiquetas'):
@@ -8156,6 +8158,636 @@ def _campos_tipo_genero_haiku(rows: List[dict], idxs: Sequence[int], km: dict) -
         if any(s in url for s in ('opinion', 'columna', 'columnist')):
             out['url_opinion'] = True
     return out
+# Rótulos que escribió el modelo en esta corrida (el pase por noticia los prefiere).
+_ROTULOS_LLM: set = set()
+
+# ============================================================================
+# Una noticia = un subtema, un tono y un tema (portado de API_2_Grill v4.72).
+# Pase FINAL sobre las filas ya volcadas: las noticias iguales o realmente
+# similares (mismo titular comparable, mismo CuerpoEs, pasaje literal compartido
+# o texto muy parecido) llevan un solo subtema, elegido entre los de sus filas y
+# cotejado contra la noticia completa. Nunca une dos notas del mismo molde que
+# nombran un lugar o una persona distintos.
+# ============================================================================
+
+_TAM_CACHE_TEXTO = 50000
+
+_ENTRADILLA = re.compile(
+    r'^\s*(?:[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ .]{2,40}(?:,\s*[^()\n]{0,30})?\s*\([^)]{2,40}\)\s*[.:\-–—]?'
+    r'|(?i:redacci[oó]n|por)\s+[A-ZÁÉÍÓÚÑa-záéíóúñ ]{2,30}\s*[\-–—|:])\s*')
+
+def quitar_entradilla(texto: str) -> str:
+    return _ENTRADILLA.sub('', str(texto or ''), count=1)
+
+
+def _primera_oracion(texto: str) -> str:
+    t = quitar_entradilla(sq(str(texto or '')[:600]))
+    return re.split(r'(?<=[.!?])\s+', t)[0] if t else ''
+
+
+def _nombres_propios_titular(titulo: str) -> set:
+    return set(_nombres_propios_titular_fs(str(titulo or '')))
+
+
+@lru_cache(maxsize=_TAM_CACHE_TEXTO)
+def _nombres_propios_titular_fs(titulo: str) -> frozenset:
+    """Palabras con mayúscula inicial del titular, salvo la primera (v4.71).
+
+    Normalizadas con nz(); sin conectores ni palabras de 1-2 letras. Sirven
+    para detectar dos titulares del mismo molde con lugares o personas
+    distintos («…en Cartagena» / «…en Medellín»). Si el titular viene todo
+    en mayúsculas no hay señal y se devuelve vacío."""
+    t = str(titulo or '')
+    letras = [c for c in t if c.isalpha()]
+    if letras and sum(c.isupper() for c in letras) > 0.6 * len(letras):
+        return set()
+    toks = re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+", t)
+    # Titular en «Title Case» (casi todas las palabras con mayúscula): la
+    # mayúscula no distingue nombres propios; sin señal.
+    largas = [w for w in toks if len(w) >= 4]
+    if largas and sum(w[0].isupper() for w in largas) > 0.6 * len(largas):
+        return set()
+    out = set()
+    for k, w in enumerate(toks):
+        if k == 0 or not w[0].isupper():
+            continue
+        n = nz(w)
+        if len(n) >= 3 and n not in CONECT:
+            out.add(n)
+    return frozenset(out)
+
+
+@lru_cache(maxsize=_TAM_CACHE_TEXTO)
+def _tokens_texto(t: str) -> frozenset:
+    return frozenset(words(t))
+
+
+def conflicto_entre_bloques(tits_a: Sequence[str], txt_a: str,
+                            tits_b: Sequence[str], txt_b: str, excluir=()) -> bool:
+    """v4.72: `_conflicto_nombre_propio` entre dos BLOQUES de notas (grupos
+    o noticias). Hay conflicto si un titular de un bloque y uno del otro son
+    del MISMO MOLDE (titulares parecidos sin contar sus nombres propios) y
+    cada uno nombra un lugar o persona ausente en todo el otro bloque.
+
+    Comparar solo el titular representante no bastaba: si el de un bloque
+    no nombra el lugar («…sede de urgencias en el norte de Bogotá»), el
+    molde «…en Chía» / «…en Usaquén» pasaba como la misma noticia. Dos
+    titulares que no se parecen («Alertan por intimidaciones cerca de
+    Unisimón» / «Policía y Gaula blindan universidades») no son un molde:
+    su relación la deciden el cuerpo y el contexto, no esta guarda."""
+    from rapidfuzz import fuzz
+    ta = list(dict.fromkeys(str(t or '') for t in tits_a if str(t or '').strip()))[:15]
+    tb = list(dict.fromkeys(str(t or '') for t in tits_b if str(t or '').strip()))[:15]
+    if not ta or not tb:
+        return False
+    ex = {nz(x) for x in (excluir or ())}
+    # Titular sin nombres propios útiles (en mayúsculas sostenidas, o solo
+    # con la marca): los de la primera oración del cuerpo del bloque.
+    lead_a = _nombres_propios_titular(_primera_oracion(txt_a)) - ex
+    lead_b = _nombres_propios_titular(_primera_oracion(txt_b)) - ex
+    props_a = {t: (_nombres_propios_titular(t) - ex) or lead_a for t in ta}
+    props_b = {t: (_nombres_propios_titular(t) - ex) or lead_b for t in tb}
+    if not any(props_a.values()) or not any(props_b.values()):
+        return False
+    toks_a = _tokens_texto(' '.join(ta) + ' ' + str(txt_a or ''))
+    toks_b = _tokens_texto(' '.join(tb) + ' ' + str(txt_b or ''))
+
+    def molde(t, props):
+        return ' '.join(w for w in words(_titulo_sin_cola(t))
+                        if w not in GENERIC_TITULO and w not in props and w not in ex)
+    for a in ta:
+        pa = props_a[a] - toks_b
+        if not pa:
+            continue
+        ma = molde(a, props_a[a])
+        for b in tb:
+            pb = props_b[b] - toks_a
+            if not pb:
+                continue
+            mb = molde(b, props_b[b])
+            if ma and mb and max(fuzz.token_set_ratio(ma, mb), fuzz.ratio(ma, mb)) >= 60:
+                return True
+    return False
+
+
+_COLA_LLAMADO = re.compile(
+    r'^\s*(lo\s+que\s+(dijo|dice|respondi[oó]|cont[oó]|explic[oó]|se\s+sabe|debe\s+saber|hay\s+que\s+saber)'
+    r'|esto\s+(se\s+sabe|dijo|es\s+lo\s+que)|detalles|todos\s+los\s+detalles'
+    r'|as[ií]\s+lo\s+dijo|qu[eé]\s+se\s+sabe|las\s+claves'
+    # v4.72: más colas de servicio que no son el hecho («…: requisitos»,
+    # «…: así funciona la campaña», «…: fechas y horarios»).
+    r'|requisitos|fechas|horarios|precios|cifras|claves|paso\s+a\s+paso'
+    r'|as[ií]\s+funciona|c[oó]mo\s+(inscribirse|participar|acceder|funciona|aplicar)'
+    r'|qu[eé]\s+pas[oó]|videos?|fotos|en\s+vivo|minuto\s+a\s+minuto)\b',
+    re.I)
+
+def _titulo_sin_cola(titulo: str) -> str:
+    """Titular sin la cola de llamado tras «:» (v4.71). Si todo el titular
+    es cola, se devuelve tal cual."""
+    t = str(titulo or '')
+    if ':' not in t:
+        return t
+    segs = t.split(':')
+    while len(segs) > 1 and _COLA_LLAMADO.match(segs[-1].strip(' "\'«»“”')):
+        segs = segs[:-1]
+    out = ':'.join(segs).strip()
+    return out or t
+
+
+SIM_NOTICIA_FINAL = 0.50
+
+SIM_NOTICIA_PROMEDIO = 0.35
+
+PASAJE_PALABRAS = 8
+
+_PREFIJO_TITULAR = re.compile(
+    r'^\s*(?:video|videos|fotos?|galer[ií]a|audio|podcast|en\s+vivo|[uú]ltima\s+hora|'
+    r'urgente|atenci[oó]n|exclusiva?|opini[oó]n|entrevista|columna|editorial|'
+    r'en\s+directo|minuto\s+a\s+minuto|live)\s*[|:–—-]+\s*', re.I)
+
+_PROBLEMAS_FORMA_DUROS = {
+    'vacio', 'caracter_marcador', 'corto', 'largo', 'termina_preposicion', 'verbo_inicial',
+    'preposicion_inicial', 'rotulo_generico', 'subtema_sin_hecho', 'marco_vacio',
+    'puntuacion', 'inicio_pronombre', 'clausula_verbal', 'tono_invalido',
+}
+
+def titulo_comparable(titulo: str, medios: Sequence[str] = ()) -> str:
+    """Titular normalizado para reconocer la misma noticia entre medios:
+    sin comillas envolventes, sin prefijo de formato («VIDEO |», «EN
+    VIVO:»), sin sufijo del medio («… - El Tiempo»), sin cola de llamado
+    («…: esto se sabe») y sin mayúsculas ni tildes."""
+    t = sq(str(titulo or '')).strip().strip('"\'«»“”').strip()
+    for _ in range(2):
+        t2 = _PREFIJO_TITULAR.sub('', t).strip().strip('"\'«»“”').strip()
+        if t2 == t:
+            break
+        t = t2
+    t = _quitar_sufijo_medio(t, medios)
+    t = _titulo_sin_cola(t)
+    return nz(t)
+
+
+def _forma_dura(c: str, titulo: str) -> set:
+    return {p.split('(')[0] for p in validar(c, 'Neutro', [titulo])} & _PROBLEMAS_FORMA_DUROS
+
+
+def _es_copia(c: str, titulo: str) -> bool:
+    return 'copia_titular' in {p.split('(')[0] for p in validar(c, 'Neutro', [titulo])}
+
+
+def _fiel_a_noticia(c: str, titulos: str, texto: str, brand: str,
+                    aliases: Sequence[str], estricto: bool) -> bool:
+    """Fidelidad contra la noticia completa. Estricto: nombres propios +
+    asunto (2 stems distintivos). Laxo: nombres propios + 1 stem distintivo
+    (paráfrasis del modelo: «Disminución de donantes de órganos» para «la
+    donación de órganos cayó 15 %»)."""
+    if not _etiqueta_fiel_a_texto(c, titulos, texto, brand, aliases):
+        return False
+    marca = _contenido_discriminante(' '.join([brand or ''] + list(aliases or [])))
+    dist = (_contenido_discriminante(c) - GENERICO_NO_UNEN) - marca
+    if not dist:
+        return True
+    hay = _contenido_discriminante(str(titulos or '') + ' ' + str(texto or ''))
+    presentes = sum(1 for d in dist if any(_emparentado(d, t) for t in hay))
+    if estricto:
+        # Al menos 2 stems (o todos si son menos) y el 60 % de ellos: dos
+        # palabras sueltas («aumento», «salud») no hacen que «Aumento de
+        # consultas por ansiedad en jóvenes» describa una alerta de dengue.
+        return presentes >= max(min(2, len(dist)), -(-3 * len(dist) // 5))
+    return presentes >= 1
+
+
+def noticias_por_evidencia(rows: List[dict], mapa: Dict[int, int],
+                           etiquetas: Dict[int, dict], km: dict,
+                           brand: str = '', aliases: Sequence[str] = (),
+                           voceros: Sequence[str] = ()) -> List[List[int]]:
+    """Paso 1 del pase v4.72: componentes de filas que son la misma noticia."""
+    filas = [i for i, r in enumerate(rows)
+             if not r.get('is_duplicate') and mapa.get(i) is not None]
+    if not filas:
+        return []
+    medios = sorted({str(rows[i].get(km.get('medio', 'Medio')) or rows[i].get('Medio') or '').strip()
+                     for i in filas} - {''}, key=len, reverse=True)
+    excl = _tokens_marca(brand, aliases, voceros)
+    par = {i: i for i in filas}
+
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    def uni(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            par[max(ra, rb)] = min(ra, rb)
+
+    tit = {i: _titulo_fila(rows[i], km) for i in filas}
+    cuerpo = {i: _texto_fila(rows[i], km) for i in filas}
+    ctx = {}
+    for i in filas:
+        c = str(rows[i].get('Contexto analizado') or '').strip()
+        ctx[i] = '' if c in ('', '-') else c
+    primero = {}
+    for i in filas:
+        gid = mapa[i]
+        claves = [('g', gid)]
+        hecho = str((etiquetas.get(gid) or {}).get('hecho') or '')
+        # Hechos consolidados por evidencia o por el modelo validado (no la
+        # clave por defecto 'g<id>' de cada grupo).
+        if hecho and not re.fullmatch(r'g\d+', hecho):
+            claves.append(('h', hecho))
+        tc = titulo_comparable(tit[i], medios)
+        if len([w for w in tc.split() if w not in GENERIC_TITULO and w not in excl]) >= 3:
+            claves.append(('t', tc))
+        nb = nz(cuerpo[i])
+        if len(nb) >= 120:
+            claves.append(('b', hashlib.md5(nb.encode('utf-8')).hexdigest()))
+        for c in claves:
+            if c in primero:
+                uni(i, primero[c])
+            else:
+                primero[c] = i
+
+    # Pasajes literales compartidos: dos medios que reescriben el mismo cable
+    # conservan frases enteras (cifras, declaraciones) aunque el coseno del
+    # texto completo sea bajo por resumir oraciones distintas. Un pasaje de
+    # PASAJE_PALABRAS palabras (sin la marca) con 4+ palabras de contenido
+    # une si trae una cifra o si son dos pasajes distintos. Mismo veto de
+    # nombre propio entre bloques.
+    if len(filas) > 1:
+        excl_n = {nz(x) for x in excl}
+        idx_pasaje = defaultdict(set)
+        for i in filas:
+            ws = [w for w in words(nz(quitar_entradilla(cuerpo[i]))) if w not in excl_n]
+            vistos = set()
+            for k in range(0, max(0, len(ws) - PASAJE_PALABRAS + 1)):
+                g = tuple(ws[k:k + PASAJE_PALABRAS])
+                if g in vistos:
+                    continue
+                vistos.add(g)
+                if sum(1 for w in g if w not in CONECT and w not in GENERIC_TITULO
+                       and not w.isdigit()) >= 4:
+                    idx_pasaje[g].add(i)
+        comparten = defaultdict(lambda: [0, False])
+        for g, ids in idx_pasaje.items():
+            if len(ids) < 2:
+                continue
+            # Un representante por bloque ya unido (las réplicas no suman).
+            por_raiz = {}
+            for x in sorted(ids):
+                por_raiz.setdefault(find(x), x)
+            if len(por_raiz) < 2 or len(por_raiz) > 30:
+                continue
+            cifra = any(w.isdigit() for w in g)
+            ids = sorted(por_raiz.values())
+            for a in range(len(ids)):
+                for b in range(a + 1, len(ids)):
+                    c = comparten[(ids[a], ids[b])]
+                    c[0] += 1
+                    c[1] = c[1] or cifra
+        miembros_p = defaultdict(list)
+        for i in filas:
+            miembros_p[find(i)].append(i)
+        for (i, j), (n_g, cifra) in sorted(comparten.items(), key=lambda kv: -kv[1][0]):
+            # Pasajes solapados de una misma frase cuentan como uno: se
+            # piden 4 n-gramas más para que sean «dos pasajes».
+            if not (cifra or n_g >= PASAJE_PALABRAS // 2 + 4):
+                continue
+            ri, rj = find(i), find(j)
+            if ri == rj:
+                continue
+            bi, bj = miembros_p[ri], miembros_p[rj]
+            if conflicto_entre_bloques([tit[a] for a in bi[:12]], ' '.join(cuerpo[a][:3000] for a in bi[:6]),
+                                       [tit[b] for b in bj[:12]], ' '.join(cuerpo[b][:3000] for b in bj[:6]),
+                                       excl):
+                continue
+            uni(i, j)
+            r = find(i)
+            miembros_p[r] = bi + bj
+            miembros_p.pop(rj if r == ri else ri, None)
+
+    # Similitud textual entre bloques (enlace promedio, sin encadenar).
+    if len(filas) > 1:
+        import numpy as np
+        S = matriz_similitud([texto_noticia(tit[i], cuerpo[i], ctx[i]) for i in filas],
+                             excluir=tokens_marca(brand, aliases, voceros))
+        pos = {i: k for k, i in enumerate(filas)}
+        ai, bi_ = np.where(np.triu(S, 1) >= SIM_NOTICIA_FINAL)
+        pares = [(float(S[a, b]), filas[a], filas[b]) for a, b in zip(ai, bi_)]
+        pares.sort(reverse=True)
+        miembros_de = defaultdict(list)
+        for i in filas:
+            miembros_de[find(i)].append(i)
+        # Representantes por titular distinto (las réplicas no cambian el
+        # cotejo de nombres propios y lo harían cuadrático).
+        def _reps(bloque):
+            vistos, out = set(), []
+            for a in bloque:
+                k = nz(tit[a])
+                if k not in vistos:
+                    vistos.add(k)
+                    out.append(a)
+            return out[:12]
+        for _s, i, j in pares:
+            ri, rj = find(i), find(j)
+            if ri == rj:
+                continue
+            bi, bj = miembros_de[ri], miembros_de[rj]
+            ia = [pos[a] for a in bi]
+            ja = [pos[b] for b in bj]
+            prom = float(S[np.ix_(ia, ja)].mean())
+            if prom < SIM_NOTICIA_PROMEDIO:
+                continue
+            conflicto = conflicto_entre_bloques(
+                [tit[a] for a in _reps(bi)], ' '.join(cuerpo[a][:3000] for a in _reps(bi)[:6]),
+                [tit[b] for b in _reps(bj)], ' '.join(cuerpo[b][:3000] for b in _reps(bj)[:6]),
+                excl)
+            if conflicto:
+                continue
+            uni(i, j)
+            raiz_n = find(i)
+            otra = rj if raiz_n == ri else ri
+            miembros_de[raiz_n] = bi + bj if raiz_n == ri else bj + bi
+            miembros_de.pop(otra, None)
+    bloques = defaultdict(list)
+    for i in filas:
+        bloques[find(i)].append(i)
+    return sorted(bloques.values(), key=lambda v: (-len(v), v[0]))
+
+
+_LUGAR_TITULAR = re.compile(
+    r'\ben\s+((?:el|la|los|las)\s+)?([A-ZÁÉÍÓÚÑ][\wáéíóúñü]+(?:\s+(?:de\s+|del\s+)?[A-ZÁÉÍÓÚÑ][\wáéíóúñü]+){0,2})')
+
+def _especificar_con_lugar(rotulo: str, titulos: Sequence[str], otros_toks,
+                           excluir=()) -> str:
+    """«Apertura de sede de urgencias» + titular «…en Chía» -> «Apertura de
+    sede de urgencias en Chía», si el lugar no aparece en la otra noticia.
+    Devuelve '' si no hay un lugar distintivo en los titulares."""
+    rot = str(rotulo or '').strip()
+    if not rot:
+        return ''
+    ex = {nz(x) for x in (excluir or ())}
+    for t in titulos or []:
+        for m in _LUGAR_TITULAR.finditer(_titulo_sin_cola(str(t or ''))):
+            lugar = m.group(2).strip()
+            toks = [w for w in words(lugar) if w not in CONECT]
+            if not toks or any(w in ex for w in toks) or any(w in otros_toks for w in toks):
+                continue
+            if nz(lugar) in nz(rot):
+                return ''
+            nuevo = '%s en %s' % (rot, lugar)
+            if len(nuevo.split()) <= MAX_PAL:
+                return nuevo
+    return ''
+
+
+def unificar_por_noticia(rows: List[dict], mapa: Dict[int, int],
+                         etiquetas: Dict[int, dict], km: dict,
+                         originales: Optional[Dict[int, str]] = None,
+                         brand: str = '', aliases: Sequence[str] = (),
+                         voceros: Sequence[str] = (),
+                         incluir_tema: bool = True, preservar_tema: bool = False,
+                         estricta: bool = True, rotulos_compartidos: Sequence[str] = ()
+                         ) -> Dict[str, int]:
+    """Pase final v4.72 (ver bloque). Trabaja sobre Subtema_IA, Tono_IA,
+    Tema_IA y TIPO de las filas ya volcadas. Devuelve estadísticas."""
+    stats = {'noticias': 0, 'noticias_multifila': 0, 'subtema': 0, 'tono': 0, 'tema': 0,
+             'separadas': 0}
+    originales = originales or {}
+    noticias = noticias_por_evidencia(rows, mapa, etiquetas, km, brand, aliases, voceros)
+    stats['noticias'] = len(noticias)
+    stats['noticias_multifila'] = sum(1 for n in noticias if len(n) > 1)
+    if not noticias:
+        return stats
+    excl = _tokens_marca(brand, aliases, voceros)
+    compartidos = {nz(x) for x in (rotulos_compartidos or ()) if nz(x)}
+    marca_stems = _contenido_discriminante(' '.join([brand or ''] + list(aliases or [])))
+
+    # Huella léxica de cada noticia (stems distintivos + prefijos de 6
+    # letras, el mismo cotejo de `_emparentado` en O(1)) para detectar un
+    # rótulo AJENO: el que describe mejor a otra noticia del dossier.
+    huellas = []
+    for miembros in noticias:
+        txt_n = ' '.join(dict.fromkeys(
+            '%s %s %s' % (_titulo_fila(rows[i], km),
+                          str(rows[i].get('Contexto analizado') or '').strip(' -'),
+                          _texto_fila(rows[i], km)[:4000]) for i in miembros[:20]))
+        hay = _contenido_discriminante(txt_n)
+        huellas.append((hay, {t[:6] for t in hay if len(t) >= 6}))
+
+    def _presentes(dist, huella):
+        hay, pref = huella
+        return sum(1 for d in dist if d in hay or (len(d) >= 6 and d[:6] in pref))
+
+    def _ajeno(c, n_propia):
+        """True si el rótulo es fiel (estricto) a otra noticia y no a esta."""
+        dist = (_contenido_discriminante(c) - GENERICO_NO_UNEN) - marca_stems
+        if len(dist) < 2:
+            return False
+        minimo = max(2, -(-3 * len(dist) // 5))
+        if _presentes(dist, huellas[n_propia]) >= minimo:
+            return False
+        return any(_presentes(dist, h) >= minimo
+                   for m, h in enumerate(huellas) if m != n_propia)
+
+    def _fuente(miembros):
+        tits = list(dict.fromkeys(_titulo_fila(rows[i], km) for i in miembros))
+        textos = list(dict.fromkeys(
+            ' '.join([str(rows[i].get('Contexto analizado') or '').strip(' -'),
+                      _texto_fila(rows[i], km)]) for i in miembros))
+        return tits, ' '.join(tits), ' '.join(textos)[:30000]
+
+    def _candidatos(miembros):
+        peso, forma, propio = Counter(), {}, set()
+        for i in miembros:
+            s = str(rows[i].get('Subtema_IA') or '').strip()
+            if s and s != '-':
+                peso[nz(s)] += 1
+                forma.setdefault(nz(s), s)
+        for gid in dict.fromkeys(mapa[i] for i in miembros):
+            n_g = sum(1 for i in miembros if mapa[i] == gid)
+            for s in (originales.get(gid), (etiquetas.get(gid) or {}).get('sub_tema')):
+                s = str(s or '').strip()
+                if s and nz(s) in _ROTULOS_LLM:
+                    # Lo que el modelo escribió para el grupo cuenta como
+                    # media nota por fila (no puede ganarle a una mayoría
+                    # clara, pero sí desempata y entra como candidato).
+                    peso[nz(s)] += 0.5 * n_g
+                    forma.setdefault(nz(s), s)
+                    propio.add(nz(s))
+        return peso, forma, propio
+
+    def _elegir(miembros, excluir_rotulos=(), n_propia=None, _respaldo=False):
+        peso, forma, propio = _candidatos(miembros)
+        tits, tit_txt, texto = _fuente(miembros)
+        if _respaldo:
+            # Ningún candidato bien formado y fiel: rótulos de emergencia
+            # desde los titulares y el cuerpo de la propia noticia.
+            for t in tits[:4]:
+                d = _subtema_especifico(t, [_texto_fila(rows[miembros[0]], km)])
+                if d and nz(d) not in peso:
+                    peso[nz(d)] = 0.1
+                    forma[nz(d)] = d
+        mejor, clave_mejor = '', None
+        for k, w in peso.items():
+            if k in excluir_rotulos:
+                continue
+            c = forma[k]
+            # Solo la marca (o genéricos) no es un subtema: no dice qué pasó.
+            sin_asunto = not ((_contenido_discriminante(c) - GENERICO_NO_UNEN) - marca_stems)
+            mala_forma = sin_asunto or bool(_forma_dura(c, tits[0] if tits else ''))
+            fiel_laxo = _fiel_a_noticia(c, tit_txt, texto, brand, aliases, estricto=False)
+            fiel = fiel_laxo and _fiel_a_noticia(c, tit_txt, texto, brand, aliases, estricto=True)
+            # La fidelidad laxa (paráfrasis) solo vale para lo que el modelo
+            # escribió leyendo ESTA noticia; un rótulo que llegó de otra
+            # noticia por una unificación debe ser fiel en sentido estricto.
+            fiel_ok = fiel or (fiel_laxo and k in propio
+                               and not (n_propia is not None and _ajeno(c, n_propia)))
+            copias = sum(1 for t in tits if _es_copia(c, t))
+            anclaje = sum(1 for t in tits if _anclaje_titulo(c, t, brand, aliases))
+            n_pal = len(c.split())
+            clave = (k in compartidos, not mala_forma, fiel_ok, copias == 0,
+                     k in propio, fiel, -copias, w, anclaje, -abs(n_pal - 5), -len(c))
+            if clave_mejor is None or clave > clave_mejor:
+                mejor, clave_mejor = c, clave
+        if not _respaldo and (clave_mejor is None or not (clave_mejor[1] and clave_mejor[2])):
+            alt, clave_alt = _elegir(miembros, excluir_rotulos, n_propia, _respaldo=True)
+            if clave_alt is not None and (clave_mejor is None or clave_alt > clave_mejor):
+                return alt, clave_alt
+        return mejor, clave_mejor
+
+    # --- 2. un subtema por noticia ---
+    elegido = {}
+    for n, miembros in enumerate(noticias):
+        actuales = {nz(str(rows[i].get('Subtema_IA') or '')) for i in miembros}
+        canon, clave = _elegir(miembros, n_propia=n)
+        if not canon:
+            continue
+        elegido[n] = canon
+        if len(actuales) <= 1 and nz(canon) in actuales:
+            continue
+        for i in miembros:
+            if nz(str(rows[i].get('Subtema_IA') or '')) != nz(canon):
+                rows[i]['Subtema_IA'] = canon
+                stats['subtema'] += 1
+
+    # --- 3. noticias distintas no comparten rótulo si son del mismo molde
+    # en otro lugar o con otra persona (solo agrupación estricta) ---
+    if estricta and len(noticias) > 1:
+        por_rot = defaultdict(list)
+        for n, c in elegido.items():
+            por_rot[nz(c)].append(n)
+        for k, ns in por_rot.items():
+            if len(ns) < 2 or k in compartidos:
+                continue
+            rep = {n: ([_titulo_fila(rows[i], km) for i in noticias[n]],
+                       ' '.join(_texto_fila(rows[i], km) for i in noticias[n][:5]))
+                   for n in ns}
+            # Cada noticia que choca con otra del mismo rótulo busca su
+            # rótulo propio (bien formado y fiel); la que no tiene uno
+            # conserva el compartido.
+            chocan = [n for n in ns if any(
+                conflicto_entre_bloques(rep[n][0], rep[n][1], rep[m][0], rep[m][1], excl)
+                for m in ns if m != n)]
+            usados = set(por_rot)
+            for n in sorted(chocan, key=lambda n: len(noticias[n])):
+                alt, clave = _elegir(noticias[n], excluir_rotulos={k}, n_propia=n)
+                if not (alt and clave and clave[1] and clave[2]) or nz(alt) in usados:
+                    # Sin rótulo propio: el compartido se especifica con el
+                    # lugar que distingue a esta noticia («Apertura de sede
+                    # de urgencias» -> «… en Chía»).
+                    otros_toks = _tokens_texto(' '.join(
+                        ' '.join(rep[m][0]) + ' ' + rep[m][1] for m in ns if m != n))
+                    alt = _especificar_con_lugar(elegido[n], rep[n][0], otros_toks, excl)
+                if alt and nz(alt) != k and nz(alt) not in usados:
+                    usados.add(nz(alt))
+                    elegido[n] = alt
+                    for i in noticias[n]:
+                        rows[i]['Subtema_IA'] = alt
+                        stats['separadas'] += 1
+
+    # --- 4. un tono por noticia y por subtema compartido ---
+    par = list(range(len(noticias)))
+
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    primero = {}
+    for n, miembros in enumerate(noticias):
+        for i in miembros:
+            k = nz(str(rows[i].get('Subtema_IA') or ''))
+            if not k:
+                continue
+            if k in primero:
+                ra, rb = find(n), find(primero[k])
+                if ra != rb:
+                    par[max(ra, rb)] = min(ra, rb)
+            else:
+                primero[k] = n
+    comp = defaultdict(list)
+    for n in range(len(noticias)):
+        comp[find(n)].extend(noticias[n])
+    for miembros in comp.values():
+        votos = Counter(rows[i].get('Tono_IA') for i in miembros if rows[i].get('Tono_IA') in TONOS)
+        if len(votos) > 1:
+            top = votos.most_common()
+            empatados = [t for t, c in top if c == top[0][1]]
+            if len(empatados) == 1:
+                ganador = empatados[0]
+            else:
+                texto = ' . '.join(dict.fromkeys(
+                    '%s. %s' % (_titulo_fila(rows[i], km),
+                                str(rows[i].get('Contexto analizado') or '').strip(' -')
+                                or _texto_fila(rows[i], km)[:1500])
+                    for i in miembros))
+                ganador = _desempate_tono(empatados, texto, brand, aliases, voceros)
+            for i in miembros:
+                if rows[i].get('Tono_IA') != ganador:
+                    rows[i]['Tono_IA'] = ganador
+                    stats['tono'] += 1
+        tipos = Counter(rows[i].get('TIPO') for i in miembros if rows[i].get('TIPO') not in ('', '-', None))
+        top_t = tipos.most_common(2)
+        if len(top_t) == 2 and top_t[0][1] > top_t[1][1]:
+            for i in miembros:
+                if rows[i].get('TIPO') not in ('', '-', None):
+                    rows[i]['TIPO'] = top_t[0][0]
+
+    # --- 5. un tema por subtema (sin PKL de tema); con PKL de tema, un tema
+    # por noticia (la clase del PKL más frecuente entre sus filas) ---
+    if incluir_tema and preservar_tema:
+        for miembros in noticias:
+            c = Counter(str(rows[i].get('Tema_IA') or '') for i in miembros
+                        if str(rows[i].get('Tema_IA') or '').strip(' -'))
+            if len(c) > 1:
+                ganador = c.most_common(1)[0][0]
+                for i in miembros:
+                    if str(rows[i].get('Tema_IA') or '') != ganador:
+                        rows[i]['Tema_IA'] = ganador
+                        stats['tema'] += 1
+    if incluir_tema and not preservar_tema:
+        por_sub = defaultdict(list)
+        for miembros in noticias:
+            for i in miembros:
+                k = nz(str(rows[i].get('Subtema_IA') or ''))
+                if k:
+                    por_sub[k].append(i)
+        for idxs in por_sub.values():
+            c = Counter(str(rows[i].get('Tema_IA') or '') for i in idxs
+                        if str(rows[i].get('Tema_IA') or '').strip(' -'))
+            if len(c) > 1:
+                ganador = c.most_common(1)[0][0]
+                for i in idxs:
+                    if str(rows[i].get('Tema_IA') or '') != ganador:
+                        rows[i]['Tema_IA'] = ganador
+                        stats['tema'] += 1
+    return stats
+
+
+
 def guarda_final_forma_subtema(rows: List[dict], km: dict,
                                originales: Optional[Dict[int, str]] = None) -> dict:
     """Clausifier (modo Haiku): guarda FINAL sobre las filas volcadas. Ningún
@@ -8236,6 +8868,8 @@ def enrich_rows_with_ai(
         'clasificar_tipo_genero': bool(extra.get('clasificar_tipo_genero')),
         'tono_distrito_positivo': bool(extra.get('tono_distrito_positivo')),
         'agrupacion_estricta': bool(extra.get('agrupacion_estricta')),
+        # Modo Haiku: auditor de tono (se puede apagar desde ai_config).
+        'auditor_tono': bool(extra.get('auditor_tono', True)),
         'tono_solo_gestion': bool(extra.get('tono_solo_gestion')),
         'tipo_por_actor': bool(extra.get('tipo_por_actor')),
         'api_key': api_key,
@@ -8342,7 +8976,12 @@ def enrich_rows_with_ai(
         import evaluador_agrupacion as _ev
         progreso(76, 'Evaluador de agrupación: revisando grupos candidatos…')
         _cands = _ev.construir_candidatos(rows, mapa, km, umbral_titulo, umbral_cuerpo)
-        _eval_dec = _ev.evaluar(_cands, rows, mapa, etiquetas, km)
+        _eval_dec = _ev.evaluar(
+            _cands, rows, mapa, etiquetas, km,
+            cliente={'brand': brand, 'aliases': list(aliases or []),
+                     'voceros': cfg.get('voceros') or [],
+                     'criterio_texto': ((cfg.get('criterio_texto') or '').strip()
+                                        or str(CRITERIOS_TONO.get(cfg.get('criterio') or '', '') or ''))})
         _eval_estado = _ev.aplicar_inicial(_eval_dec, _cands, mapa, etiquetas)
         _ULTIMO_RESUMEN['evaluador_agrupacion'] = dict(_ev.ULTIMO)
     # v4.74: subtema que el etiquetador le dio a cada grupo, antes de las
@@ -8350,6 +8989,8 @@ def enrich_rows_with_ai(
     # noticia su rótulo propio cuando una unificación la forzó).
     subtemas_originales = {gid: (e or {}).get('sub_tema') or ''
                            for gid, e in etiquetas.items()}
+    _ROTULOS_LLM.clear()
+    _ROTULOS_LLM.update(nz(sq(x)) for x in subtemas_originales.values() if x)
     estricta = bool(cfg.get('agrupacion_estricta'))
     if estricta:
         # v1.31: agrupación estricta. Sin unificaciones por parecido del
@@ -8685,6 +9326,20 @@ def enrich_rows_with_ai(
         ajustes_subtema=ajustes_fieles,
         km=km,
     )
+
+    # Garantía FINAL sobre las filas ya volcadas (portado de API_2_Grill
+    # v4.72): la misma noticia (mismo grupo, titular, CuerpoEs o texto muy
+    # similar) lleva un solo subtema, un solo tono y un solo tema.
+    progreso(93, 'Unificando subtema, tono y tema por noticia…')
+    _por_noticia = unificar_por_noticia(
+        rows, mapa, etiquetas, km, originales=subtemas_originales,
+        brand=brand, aliases=aliases, voceros=cfg.get('voceros') or [],
+        incluir_tema=incluir_tema,
+        preservar_tema=(theme_model is not None) and incluir_tema,
+        estricta=bool(cfg.get('agrupacion_estricta')) and not cfg.get('guia_subtema'),
+        rotulos_compartidos=[(r or {}).get('subtema') for r in (cfg.get('subtemas_fijos') or [])
+                             if isinstance(r, dict)])
+    _ULTIMO_RESUMEN['unificacion_por_noticia'] = _por_noticia
     if _eval_dec:
         # Clausifier: las decisiones del evaluador mandan sobre todas las
         # unificaciones deterministas anteriores (por grupo y por fila).
@@ -8747,7 +9402,8 @@ def enrich_rows_with_ai(
         _ULTIMO_RESUMEN['costo_modelo'] = info_haiku.get('modelo') or 'claude-haiku'
         _ULTIMO_RESUMEN['haiku'] = {k: info_haiku.get(k) for k in (
             'costo_usd', 'turnos', 'filas', 'faltan', 'cambios_revision',
-            'grupos_revision', 'subtype', 'error', 'rechazos', 'marcados')}
+            'grupos_revision', 'subtype', 'error', 'rechazos', 'marcados',
+            'auditor_tono', 'roles')}
         _ref = _ULTIMO_RESUMEN.get('haiku_reformulacion') or {}
         _ULTIMO_RESUMEN['costo_aprox_usd'] = round(
             _ULTIMO_RESUMEN['costo_aprox_usd'] + float(_ref.get('costo_usd') or 0.0), 4)
