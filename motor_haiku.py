@@ -307,6 +307,15 @@ def problemas_subtema(subtema: str, titulo: str = "", contexto: str = "") -> Lis
     s = str(subtema or "").strip()
     if not s:
         return ["vacío"]
+    # 2026-11-09: el nombre propio de un programa, plan, obra u operación
+    # («Metro de Bogotá», «Jóvenes a la E», «Operación Kratos») es un subtema
+    # válido aunque sea corto o aparezca en el titular.
+    try:
+        import analyzer_tono_tema as _a
+        if _a._es_nombre_de_tema(s) and not empieza_con_verbo(s):
+            return []
+    except Exception:  # noqa: BLE001
+        pass
     p = []
     # Clausifier 2026-11-08: el largo 3-7 cuenta palabras de contenido; los
     # artículos y preposiciones no suman ("Jornada de esterilización gratuita
@@ -587,6 +596,15 @@ async def _guardar_clasificacion(args: Dict[str, Any], tramo=None) -> Dict[str, 
         if sub and _simple(sub) not in _ESTADO.get("permitidos", set()):
             # (los rótulos exactos que fija el perfil del cliente no se validan)
             prob = problemas_subtema(sub, d.get("titulo", ""), d.get("contexto", ""))
+        # 2026-11-09: con TIPO/GÉNERO activos, una fila sin esos campos no se
+        # guarda (antes quedaba con el valor por defecto y el agente no se
+        # enteraba: todo salía «Información general»).
+        if _ESTADO.get("con_tipo_genero"):
+            _prev = _ESTADO["res"].get(_raiz(fid)) or {}
+            _falta = [c for c in ("tipo", "genero") if not (f.get(c) or _prev.get(c))]
+            if _falta:
+                prob.append("falta %s (envía \"tipo\" y \"genero\" con los valores exactos de "
+                            "<tipo_y_genero>)" % " y ".join(_falta))
         # Coherencia rol ↔ tono: el tono sale del papel del cliente en la nota.
         rol = f.get("rol")
         if rol and not _ESTADO.get("tono_pkl") and ROLES[rol] != f["tono"]:
@@ -786,6 +804,7 @@ SUBTEMA: clasificación precisa y específica del hecho que cuenta el "contexto"
 - NUNCA es un extracto, recorte o casi-copia del título ni del contexto: sintetiza el hecho con tus palabras.
 - Específico, no genérico: nada de "Gestión de la alcaldía" ni "Situación de orden público".
 - Nunca el nombre del medio, sin comas ni punto final.
+- Excepción: si la nota trata de un programa, plan, obra, servicio u operación con NOMBRE PROPIO, el subtema es ese nombre tal como se le conoce, aunque sea corto o esté en el titular: "Jóvenes a la E", "Operación Kratos", "Plan Motos y Vehículos en Engativá", "Metro de Bogotá".
 __RUBRICA_SUBTEMA__
 Si el pedido trae un bloque <guia_subtema>, esa guía del cliente MANDA sobre estas reglas en los casos que nombre.
 Reglas de Grill (literales):
@@ -842,13 +861,14 @@ BLOQUE_TIPO_GENERO = """
 <tipo_y_genero>
 En este pedido cada noticia lleva también TIPO y GÉNERO; guárdalos en "tipo" y "genero" con guardar_clasificacion, escritos EXACTAMENTE como aquí (tildes y mayúsculas incluidas).
 
-TIPO (Tipo de información), exactamente uno de:
-- Institucional: información sobre la entidad directamente, por ejemplo nombramientos, presupuesto, ampliación, cambio de sede.
+TIPO (Tipo de información), exactamente uno de (definiciones del cliente):
+- Institucional: información relacionada con la entidad directamente, como nombramientos, presupuesto, ampliación, cambios de sede, o sobre la Alcaldía o el alcalde mismos (su estructura, sus decisiones, su posición, sus declaraciones). Ejemplos: "Alcaldía prepara reforma para fusionar entidades del Distrito", "Galán explicó su posición sobre la asistencia militar" => Institucional.
   También Institucional: anuncios y declaraciones de la entidad o de sus voceros (el alcalde Carlos Fernando Galán, el secretario general Miguel Silva Moyano) sobre decisiones propias de la entidad. Ejemplo: "El alcalde Carlos Fernando Galán anunció …" => Institucional (salvo que lo anunciado sea un programa, proyecto, jornada, subsidio u obra: Programas y proyectos).
-- Información general: información que solo menciona a la entidad, o que no cumple los criterios de otra categoría.
-- Programas y proyectos: la gestión de la entidad, sus programas, proyectos, subsidios, jornadas de acompañamiento, la labor de la entidad.
-- Opinión de terceros: opiniones sobre la marca de personas que no hacen parte de la entidad.
-- Ranking: la marca aparece en rankings o listados de posicionamiento.
+- Información general: información que solo indique una mención, o que no cumpla el criterio para ser clasificada en otra categoría. Aquí va la política ajena a la gestión: notas sobre Petro, Ordóñez u otros políticos, y sobre aspirantes o candidatos a la Alcaldía. También un accidente, un delito, un concierto o un hecho de terceros donde la Alcaldía solo es fuente, lugar o referencia. Ejemplos: "¿Uribe ve a Petro candidato a la Alcaldía de Bogotá?", "Motociclista murió tras chocar en Barrios Unidos" => Información general.
+- Programas y proyectos: gestión de la entidad, programas, proyectos, subsidios, jornadas de acompañamiento, labores de la entidad. Lo que la Alcaldía, sus secretarías o entidades del Distrito HACEN para la ciudadanía: ferias y vacantes de empleo, jornadas (vacunación, esterilización), obras e intervenciones, becas, pasajes o servicios gratuitos, capacitaciones, operativos y planes de seguridad. Ejemplos: "Bogotá ofrece 2.946 vacantes esta semana", "Bogotá transforma el entorno del Jardín Infantil Olarte" => Programas y proyectos.
+- Opinión de terceros: opiniones de personas que no hacen parte de la entidad acerca de la marca.
+- Ranking: aparición de la marca en rankings o listados de posicionamiento.
+Cómo decidir: si es un ranking, Ranking. Si es la opinión de un tercero sobre la marca, Opinión de terceros. Si la nota destaca algo que la entidad HACE para la ciudadanía, Programas y proyectos (aunque lo anuncie el alcalde). Si trata de la entidad, la Alcaldía o el alcalde en sí, Institucional. En cualquier otro caso, Información general.
 
 GÉNERO (Género de información, el género periodístico), exactamente uno de: Noticia, Reportaje, Opinión, Entrevista, Editorial.
 - Opinión: columna o texto de opinión firmado. Si "url_contiene_opinion" es true, o "seccion_programa" es una sección de opinión o de columnas (Opinión, Columnistas, Columna), el GÉNERO es Opinión. El diario La Opinión (laopinion) NO es una sección de opinión.
@@ -858,6 +878,7 @@ GÉNERO (Género de información, el género periodístico), exactamente uno de:
 - Noticia: en cualquier otro caso, y siempre que dudes.
 Cuando el GÉNERO es Opinión y quien opina no hace parte de la entidad, el TIPO normalmente es Opinión de terceros.
 Las mismas noticias del mismo hecho llevan el mismo TIPO.
+guardar_clasificacion RECHAZA la fila que llegue sin "tipo" o sin "genero".
 </tipo_y_genero>"""
 
 TIPO_GENERO_TOOL = ',"tipo":"%s","genero":"%s"' % ("|".join(TIPOS), "|".join(GENEROS))

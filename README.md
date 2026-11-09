@@ -5,6 +5,35 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### Nunca agrupar porque sí (caso «Jardín Olarte», 2026-11-09)
+
+Dossier real de la Secretaría General revisado a mano (51 filas). Con las
+etiquetas revisadas como respuesta del modelo, el código las dañaba en 7
+subtemas; ahora coinciden salvo una unificación legítima.
+
+- **El pie del medio no es evidencia.** El pase «una noticia = un subtema»
+  unía dos notas de Pulzo porque compartían «Pulzo.com se escribe con Z», y
+  dos de Bogotá.gov por su pie fijo. Los pasajes entre notas del mismo medio
+  ya no cuentan, y un pasaje compartido solo une si además los textos se
+  parecen (coseno >= 0,20).
+- **El nombre propio de un programa es un subtema válido** («Plan Motos y
+  Vehículos en Engativá», «Jóvenes a la E», «Operación Kratos»): no se
+  rechaza por corto ni por estar en el titular, y ninguna reparación lo
+  reemplaza por un recorte del texto.
+- **Una reparación nunca deja un rótulo peor**: si el respaldo recortado
+  empieza con verbo o es otro extracto, se conserva el del modelo.
+- **Tono**: notas cuyo titular nombra a una figura ajena del perfil
+  (`tono_neutro_titulo`, hoy «Petro») y no a un vocero propio son Neutro;
+  un titular de candidaturas o elecciones no sube a Positivo.
+- **TIPO, definiciones del cliente (2026-11-09)**: Institucional incluye la
+  Alcaldía y el alcalde mismos; Información general incluye la política
+  ajena (Petro, Ordóñez, aspirantes a la Alcaldía), y un titular electoral o
+  de una figura de `tono_neutro_titulo` queda en Información general.
+- **TIPO**: una fila sin `tipo` o `genero` se rechaza (antes quedaba en el
+  valor por defecto y todo salía «Información general» o «Institucional»);
+  definiciones con orden de decisión y ejemplos; la gestión de un programa,
+  feria, jornada u obra es «Proyectos y programas», no «Institucional».
+
 ## Agilidad, medición por etapa y pantalla de resultados (portado de API_2_Grill)
 
 - **Clasificación en paralelo.** Con 100 o más noticias, hasta 4 agentes
