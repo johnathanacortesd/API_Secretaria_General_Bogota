@@ -5,6 +5,26 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+## Agilidad, medición por etapa y pantalla de resultados (portado de API_2_Grill)
+
+- **Clasificación en paralelo.** Con 100 o más noticias, hasta 4 agentes
+  Haiku clasifican tramos a la vez; un agente de cierre recoge lo pendiente
+  y revisa la consistencia entre tramos. `paralelo: 1` vuelve a un agente.
+- **Auditor de tono y evaluador de agrupación a la vez.**
+- **Memoria del cliente** (`memoria_cliente.py`): una noticia ya clasificada
+  con la misma configuración no vuelve al modelo. Caduca a los 45 días y se
+  invalida si cambia la configuración o las instrucciones del motor. Se
+  apaga con la casilla «Reutilizar clasificaciones previas» o
+  `memoria: false`.
+
+Con TIPO y GÉNERO activos, la memoria guarda y reutiliza también esos dos campos; una noticia solo se reutiliza si los trae y son válidos.
+- **Candidatos por matriz** de rapidfuzz en el revisor y el evaluador
+  (mismo resultado que antes).
+- **Medición por etapa**: `process_dossier` devuelve `tiempos`.
+- **Pantalla de resultados**: distribución de tono, tabla de subtemas,
+  noticias clasificadas con filtro, pestaña «Para revisar», tiempo por etapa
+  e historial como tabla.
+
 ## Tono por rol, auditor de tono y una noticia = un subtema (portado de API_2_Grill)
 
 Se conserva todo lo que esta app ya hacía; se suma:

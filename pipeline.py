@@ -1793,6 +1793,29 @@ def _ai_extra_con_pkl(ai_config: Optional[dict], theme_model) -> dict:
 # ======================================
 # Proceso Principal
 # ======================================
+MAX_VISTA = 5000
+
+
+def vista_resultado(rows, km) -> List[dict]:
+    """Filas únicas ya clasificadas, solo con lo que muestra la pantalla de
+    resultados (la interfaz no vuelve a leer el xlsx)."""
+    cols = (("ID", km.get("idnoticia", "ID Noticia")), ("Título", km.get("titulo", "Título")),
+            ("Medio", km.get("medio", "Medio")), ("Tono", "Tono_IA"), ("Tema", "Tema_IA"),
+            ("Subtema", "Subtema_IA"))
+    out = []
+    for r in rows:
+        if r.get("is_duplicate"):
+            continue
+        fila = {}
+        for nombre, col in cols:
+            v = r.get(col)
+            fila[nombre] = "" if v is None or str(v).strip() in ("", "-", "nan") else str(v)
+        out.append(fila)
+        if len(out) >= MAX_VISTA:
+            break
+    return out
+
+
 def process_dossier(
     file_obj,
     region_map,
@@ -1806,6 +1829,21 @@ def process_dossier(
     # reportado cubre TODO el proceso y no solo lo que corre dentro de esta
     # función. Sin él, se mide desde aquí como antes.
     t0 = t_inicio if t_inicio is not None else time.time()
+    # Medición por etapa (la interfaz la muestra al terminar).
+    tiempos: List[dict] = []
+    _reloj = [t0]
+
+    def _etapa(nombre: str, sub: Optional[dict] = None) -> None:
+        ahora = time.time()
+        seg = round(ahora - _reloj[0], 2)
+        _reloj[0] = ahora
+        if seg >= 0.01 or sub:
+            tiempos.append({"etapa": nombre, "segundos": seg})
+            for k, v in (sub or {}).items():
+                tiempos.append({"etapa": k, "segundos": round(float(v), 2), "sub": True})
+
+    if t_inicio is not None:
+        _etapa("Carga de configuración")
     emit_progress(progress, 2, "Cargando archivo…")
     file_bytes = file_to_bytes(file_obj)
 
@@ -1867,6 +1905,7 @@ def process_dossier(
     emit_progress(progress, 62, "Detectando duplicados…")
     rows = detectar_duplicados_avanzado(rows_expanded, KEY_MAP)
 
+    _etapa("Lectura, limpieza y duplicados")
     has_ai = bool(ai_config and ai_config.get("enabled"))
     # Motor de clasificación: "openai" (actual, por defecto) o "haiku"
     # (agente Claude Haiku, motor_haiku.py). En modo haiku no se cargan PKL
@@ -1927,6 +1966,9 @@ def process_dossier(
     # v4.24: el usuario puede desactivarla con el checkbox "Agregar columna
     # Prominencia" en la app (incluir_prominencia; desde v4.26 default False,
     # checkbox desmarcado).
+    if has_ai or has_pkl:
+        _etapa("Análisis de tono, tema y subtema" if has_ai else "Modelos PKL del cliente",
+               sub=(analisis or {}).get("tiempos"))
     _brand_prom = ((ai_config or {}).get("brand") or "").strip()
     _incluir_prominencia = bool(_brand_prom) and bool(
         (ai_config or {}).get("incluir_prominencia", False))
@@ -2040,8 +2082,11 @@ def process_dossier(
         for _r in rows:
             _r["FECHA INFORME"] = _fecha_informe
 
+    _etapa("Prominencia y orden")
     output_data = generate_output_excel(rows, KEY_MAP, progress=export_progress, columns_to_use=cols_to_export)
+    _etapa("Generación del Excel")
     _conteo_tonos = _contar_tonos(rows)
+    _vista = vista_resultado(rows, KEY_MAP) if (has_ai or has_pkl) else []
     del rows, rows_expanded
     gc.collect()
     duration = time.time() - t0
@@ -2071,6 +2116,9 @@ def process_dossier(
         "medios_sin_mapear": medios_sin_region,
         "analisis": analisis,
         "_filas": _conteo_tonos,
+        # Tiempo por etapa y filas clasificadas para la pantalla de resultados.
+        "tiempos": tiempos,
+        "vista": _vista,
     }
 
     # Auditoria de uso por correo (SMTP). Nunca interrumpe la corrida.
