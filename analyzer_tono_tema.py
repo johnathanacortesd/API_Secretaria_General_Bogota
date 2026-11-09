@@ -1323,6 +1323,14 @@ _EVENTO_NOMBRE = {
     'simposio', 'jornada', 'conversatorio', 'concurso', 'premio', 'asamblea',
     'inauguracion', 'lanzamiento', 'presentacion',
 }
+# 2026-11-09: nombres de programa, plan u operación («Plan Motos y Vehículos
+# en Engativá», «Operación Kratos», «Inspecciones de Convivencia y Paz»)
+# nombran el hecho: no son una lista de nombres sin hecho. Solo se usa en
+# `_es_subtema_sin_hecho` (no cambia la detección de copia del titular).
+_PROGRAMA_NOMBRE = {
+    'plan', 'programa', 'operacion', 'operativo', 'estrategia', 'proyecto', 'campana',
+    'inspeccion', 'inspecciones', 'linea', 'ruta', 'corredor', 'mision', 'mesa',
+}
 
 
 def _subtema_vago(sub_tema: str) -> bool:
@@ -1512,7 +1520,7 @@ def _es_subtema_sin_hecho(sub_tema: str) -> bool:
         return False
     if all(w in _LLAMADO_FUNCIONAL for w in contenido):
         return True
-    if any(w in _EVENTO_NOMBRE for w in contenido):
+    if any(w in _EVENTO_NOMBRE or w in _PROGRAMA_NOMBRE for w in contenido):
         return False
     # Lista de nombres: cada palabra de contenido va en mayúscula inicial
     # (o sigla) en el texto ORIGINAL, sin ningún sustantivo en minúscula.
@@ -2235,6 +2243,13 @@ _REACCION_PAT = re.compile(
     r'dijo|se[ñn]al\w*|indic\w*|anunci\w*|explic\w*)\b', re.I)
 
 
+_GESTION_PROGRAMA_PAT = re.compile(
+    r'\b(jornadas?|programas?|proyectos?|subsidios?|obras?|ferias?|vacantes|ofertas? laboral(?:es)?|'
+    r'oportunidades laborales|becas?|capacitacion(?:es)?|esterilizacion|vacunacion|pasajes? gratis|'
+    r'gratuit[oa]s?|convocatorias?|inscripciones|entrega(?:ra|ron|n)? de|intervencion(?:es)?|'
+    r'transforma(?:cion)?|operativos?|operacion|cupos|estrena(?:ra)?|estreno)\b')
+
+
 def aplicar_tipo_por_actor(grupos, etiquetas, brand, aliases, voceros=()):
     """TIPO calibrado con 132 notas etiquetadas a mano (v1.33, flag
     tipo_por_actor). Acierto 43 % -> 74 % en la repetición:
@@ -2266,6 +2281,13 @@ def aplicar_tipo_por_actor(grupos, etiquetas, brand, aliases, voceros=()):
                          if any(a in nz(o) for a in actores)]
             if not oraciones:
                 nuevo = 'Información general'
+            elif t == 'Información general' and _marca_sujeto_de_gestion(texto, actores) \
+                    and _GESTION_PROGRAMA_PAT.search(nz('%s. %s' % (
+                        g.get('titulo') or '', str(g.get('contexto') or g.get('texto') or '')[:600]))):
+                # 2026-11-09: la marca EJECUTA un programa, jornada, feria,
+                # obra o servicio => es gestión (Proyectos y programas), no
+                # Institucional.
+                nuevo = 'Proyectos y programas'
             elif t == 'Información general' and (
                     any(HABLA_PAT.search(nz(o)) or _REACCION_PAT.search(o) for o in oraciones)
                     or _marca_sujeto_de_gestion(texto, actores)):
@@ -7818,6 +7840,11 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
             # del motor (verbo inicial en cualquier forma, extracto, 3-7).
             _mal += _forma_haiku(_s, _g.get('titulo') or '',
                                           _g.get('contexto_marca') or '')
+        if _mal and _es_nombre_de_tema(_s):
+            # 2026-11-09: el nombre propio de un programa, plan u operación
+            # («Plan Motos y Vehículos en Engativá», «Jóvenes a la E») ES el
+            # subtema aunque aparezca en el titular o sea corto: no se repara.
+            _mal = []
         if _mal:
             # v4.63: una llamada o lista de nombres tampoco se exporta,
             # aunque no copie el titular: va a la misma reformulación.
@@ -7838,6 +7865,8 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
         if _haiku_mode:
             _malf += _forma_haiku(_s, _tit, rows[_i].get('Contexto analizado') or ''
                                            if _i < len(rows) else '')
+        if _malf and _es_nombre_de_tema(_s):
+            _malf = []
         if _malf:
             fallos_fila.append({'grupo': 900000 + _i, 'titulo': _tit,
                                 'texto': _txt, 'sub_tema': _s,
@@ -7938,8 +7967,19 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
             etiquetas[_gid]['sub_tema'] = _nuevo
             reparados_ok += 1
         else:
-            etiquetas[_gid]['sub_tema'] = _subtema_especifico(
-                _f['titulo'], [_f.get('texto') or ''])
+            _resp = _subtema_especifico(_f['titulo'], [_f.get('texto') or ''])
+            # 2026-11-09: el respaldo sale de recortar el titular o el texto.
+            # Si el recorte queda peor que el rótulo original (empieza con
+            # verbo, trae un verbo conjugado o es otro extracto), se conserva
+            # el original: nunca se cambia un rótulo por uno peor.
+            _base_r = [x.split('(')[0] for x in validar(_resp, 'Neutro', [_f['titulo']])] if _resp else ['vacio']
+            _resp_malo = any(x in _base_r for x in ('vacio', 'copia_titular', 'subtema_sin_hecho',
+                                                    'verbo_inicial', 'preposicion_inicial',
+                                                    'clausula_verbal', 'inicio_pronombre'))
+            if not _resp_malo and _haiku_mode:
+                _resp_malo = bool(_forma_haiku(_resp, _f['titulo'],
+                                               (grupo_por_id.get(_gid) or {}).get('contexto_marca') or ''))
+            etiquetas[_gid]['sub_tema'] = _f['sub_tema'] if _resp_malo else _resp
             sin_reparar += 1
     for _f in fallos_fila:
         _i = _f['_fila']
@@ -8304,6 +8344,7 @@ def _titulo_sin_cola(titulo: str) -> str:
 SIM_NOTICIA_FINAL = 0.50
 
 SIM_NOTICIA_PROMEDIO = 0.35
+SIM_PISO_PASAJE = 0.20      # parecido mínimo del texto para unir por pasaje literal
 
 PASAJE_PALABRAS = 8
 
@@ -8422,7 +8463,20 @@ def noticias_por_evidencia(rows: List[dict], mapa: Dict[int, int],
     # PASAJE_PALABRAS palabras (sin la marca) con 4+ palabras de contenido
     # une si trae una cifra o si son dos pasajes distintos. Mismo veto de
     # nombre propio entre bloques.
+    # 2026-11-09 (caso «Jardín Olarte»): el pie fijo del medio («Pulzo.com se
+    # escribe con Z», «El artículo fue curado por… Portal Bogotá») también es
+    # un pasaje literal compartido y unía notas que no tienen nada que ver.
+    # Dos guardas: los pasajes entre notas del MISMO medio no cuentan (la
+    # misma nota republicada ya se une por titular o por cuerpo), y dos notas
+    # solo se unen por pasaje si además sus textos se parecen
+    # (coseno >= SIM_PISO_PASAJE). Nunca se agrupa porque sí.
+    S_txt = None
+    pos_txt = {i: k for k, i in enumerate(filas)}
+    medio_de = {i: nz(str(rows[i].get(km.get('medio', 'Medio')) or rows[i].get('Medio') or ''))
+                for i in filas}
     if len(filas) > 1:
+        S_txt = matriz_similitud([texto_noticia(tit[i], cuerpo[i], ctx[i]) for i in filas],
+                                 excluir=tokens_marca(brand, aliases, voceros))
         excl_n = {nz(x) for x in excl}
         idx_pasaje = defaultdict(set)
         for i in filas:
@@ -8450,6 +8504,8 @@ def noticias_por_evidencia(rows: List[dict], mapa: Dict[int, int],
             ids = sorted(por_raiz.values())
             for a in range(len(ids)):
                 for b in range(a + 1, len(ids)):
+                    if medio_de[ids[a]] and medio_de[ids[a]] == medio_de[ids[b]]:
+                        continue        # pie o plantilla del mismo medio
                     c = comparten[(ids[a], ids[b])]
                     c[0] += 1
                     c[1] = c[1] or cifra
@@ -8464,6 +8520,8 @@ def noticias_por_evidencia(rows: List[dict], mapa: Dict[int, int],
             ri, rj = find(i), find(j)
             if ri == rj:
                 continue
+            if float(S_txt[pos_txt[i], pos_txt[j]]) < SIM_PISO_PASAJE:
+                continue                # comparten una frase, no la noticia
             bi, bj = miembros_p[ri], miembros_p[rj]
             if conflicto_entre_bloques([tit[a] for a in bi[:12]], ' '.join(cuerpo[a][:3000] for a in bi[:6]),
                                        [tit[b] for b in bj[:12]], ' '.join(cuerpo[b][:3000] for b in bj[:6]),
@@ -8477,9 +8535,8 @@ def noticias_por_evidencia(rows: List[dict], mapa: Dict[int, int],
     # Similitud textual entre bloques (enlace promedio, sin encadenar).
     if len(filas) > 1:
         import numpy as np
-        S = matriz_similitud([texto_noticia(tit[i], cuerpo[i], ctx[i]) for i in filas],
-                             excluir=tokens_marca(brand, aliases, voceros))
-        pos = {i: k for k, i in enumerate(filas)}
+        S = S_txt
+        pos = pos_txt
         ai, bi_ = np.where(np.triu(S, 1) >= SIM_NOTICIA_FINAL)
         pares = [(float(S[a, b]), filas[a], filas[b]) for a, b in zip(ai, bi_)]
         pares.sort(reverse=True)
@@ -8882,6 +8939,8 @@ def guarda_final_forma_subtema(rows: List[dict], km: dict,
     import motor_haiku as _mh
 
     def _malo(s, tit):
+        if _es_nombre_de_tema(s) and not _mh.empieza_con_verbo(s):
+            return False        # nombre propio de programa: no es copia
         return _mh.empieza_con_verbo(s) or bool(
             tit and _mh.es_copia(s, tit) in ('copia del título', 'casi igual al título',
                                              'extracto literal del título'))
@@ -8960,6 +9019,7 @@ def enrich_rows_with_ai(
         'paralelo': int(extra.get('paralelo', 4) or 0),
         'memoria': bool(extra.get('memoria', True)),
         'tono_solo_gestion': bool(extra.get('tono_solo_gestion')),
+        'tono_neutro_titulo': [str(x) for x in (extra.get('tono_neutro_titulo') or []) if str(x).strip()],
         'tipo_por_actor': bool(extra.get('tipo_por_actor')),
         'api_key': api_key,
         'typesafe_api_key': extra.get('typesafe_api_key') or '',
@@ -9424,6 +9484,14 @@ def enrich_rows_with_ai(
         grupos, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
     if _bajados_homonimo:
         _ULTIMO_RESUMEN['tono_homonimo_extranjero'] = _bajados_homonimo
+    # 2026-11-09: notas electorales o sobre una figura ajena (perfil:
+    # tono_neutro_titulo, p. ej. "Petro") = Neutro. Solo sin PKL de tono.
+    if tone_model is None:
+        _neutro_tit = aplicar_regla_neutro_titulo(
+            grupos, etiquetas, cfg.get('tono_neutro_titulo') or [],
+            voceros=cfg.get('voceros') or [], electoral=bool(cfg.get('tono_solo_gestion')))
+        if _neutro_tit:
+            _ULTIMO_RESUMEN['tono_neutro_por_titulo'] = _neutro_tit
 
     # v1.13/v1.9 (2026-10-31): fidelidad FINAL por fila (ver
     # aplicar_fidelidad_final_subtema). Es el último pase que toca el
@@ -10822,6 +10890,45 @@ def _contiene_frase(toks, frase):
     if n == 1:
         return partes[0] in toks
     return any(toks[k:k + n] == partes for k in range(len(toks) - n + 1))
+
+
+_ELECTORAL_TITULO = re.compile(
+    r'\b(candidat[oa]s?|precandidat[oa]s?|aspirantes?|candidatura|elecciones|contienda electoral|'
+    r'campana electoral)\b')
+
+
+def aplicar_regla_neutro_titulo(grupos, etiquetas, terminos, voceros=(), electoral=False):
+    """2026-11-09: el tono mide la gestión del cliente, no la política ajena.
+
+    - `terminos` (perfil, p. ej. ["Petro"]): una nota cuyo TITULAR nombra a
+      esa figura y no nombra a un vocero propio es Neutro (Positivo o
+      Negativo): la nota trata de esa figura, no del cliente.
+    - `electoral`: un titular de candidaturas o elecciones no es gestión: un
+      Positivo baja a Neutro («¿Uribe ve a Petro candidato a la Alcaldía de
+      Bogotá?» mencionaba que el alcalde «ganó» y salía Positivo).
+    El Neutro queda pegajoso. Devuelve los grupos cambiados."""
+    terms = [nz(t) for t in (terminos or []) if nz(t)]
+    propios = [nz(v) for v in (voceros or [])
+               if v and str(v)[:1].isupper() and len(nz(v)) >= 4]
+    cambiados = []
+
+    def _nombra(lista, t):
+        return any(re.search(r'\b' + re.escape(x) + r'\b', t) for x in lista)
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or e.get('tono') not in ('Positivo', 'Negativo'):
+            continue
+        titulos = [nz(t) for t in [g.get('titulo') or ''] + list(g.get('titulos_alt') or []) if t]
+        if not titulos:
+            continue
+        ajena = bool(terms) and all(_nombra(terms, t) and not _nombra(propios, t) for t in titulos)
+        eleccion = electoral and e['tono'] == 'Positivo' \
+            and all(_ELECTORAL_TITULO.search(t) for t in titulos)
+        if ajena or eleccion:
+            e['tono'] = 'Neutro'
+            e.setdefault('flags', {})['neutro_pegajoso'] = True
+            cambiados.append(g.get('grupo'))
+    return cambiados
 
 
 def aplicar_regla_homonimo_extranjero(grupos, etiquetas, brand, aliases, voceros=()):

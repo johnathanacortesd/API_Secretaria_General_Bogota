@@ -670,6 +670,7 @@ def main():
                             st.session_state["_perfil_tono_distrito_positivo"] = bool(_perfil_actual.get("tono_distrito_positivo"))
                             st.session_state["_perfil_agrupacion_estricta"] = bool(_perfil_actual.get("agrupacion_estricta"))
                             st.session_state["_perfil_tono_solo_gestion"] = bool(_perfil_actual.get("tono_solo_gestion"))
+                            st.session_state["_perfil_tono_neutro_titulo"] = list(_perfil_actual.get("tono_neutro_titulo") or [])
                             st.session_state["_perfil_tipo_por_actor"] = bool(_perfil_actual.get("tipo_por_actor"))
                             st.session_state["_perfil_formato_boletin"] = bool(_perfil_actual.get("formato_boletin"))
                             _cm_p = _perfil_actual.get("hora_boletin_corte_manana")
@@ -690,6 +691,7 @@ def main():
                     st.session_state["_perfil_tono_distrito_positivo"] = False
                     st.session_state["_perfil_agrupacion_estricta"] = False
                     st.session_state["_perfil_tono_solo_gestion"] = False
+                    st.session_state["_perfil_tono_neutro_titulo"] = []
                     st.session_state["_perfil_tipo_por_actor"] = False
                     st.session_state["_perfil_formato_boletin"] = False
                     st.session_state["_perfil_hora_boletin_corte_manana"] = 13
@@ -955,6 +957,7 @@ def main():
                                         "tono_distrito_positivo": bool(st.session_state.get("_perfil_tono_distrito_positivo")),
                                         "agrupacion_estricta": bool(st.session_state.get("_perfil_agrupacion_estricta")),
                                         "tono_solo_gestion": bool(st.session_state.get("_perfil_tono_solo_gestion")),
+                                        "tono_neutro_titulo": list(st.session_state.get("_perfil_tono_neutro_titulo") or []),
                                         "tipo_por_actor": bool(st.session_state.get("_perfil_tipo_por_actor")),
                                         "formato_boletin": bool(st.session_state.get("_perfil_formato_boletin")),
                                         "hora_boletin_corte_manana": st.session_state.get("_perfil_hora_boletin_corte_manana", 13),
@@ -996,6 +999,7 @@ def main():
                                     "tono_distrito_positivo": bool(st.session_state.get("_perfil_tono_distrito_positivo")),
                                     "agrupacion_estricta": bool(st.session_state.get("_perfil_agrupacion_estricta")),
                                     "tono_solo_gestion": bool(st.session_state.get("_perfil_tono_solo_gestion")),
+                                    "tono_neutro_titulo": list(st.session_state.get("_perfil_tono_neutro_titulo") or []),
                                     "tipo_por_actor": bool(st.session_state.get("_perfil_tipo_por_actor")),
                                     "formato_boletin": bool(st.session_state.get("_perfil_formato_boletin")),
                                     "hora_boletin_corte_manana": st.session_state.get("_perfil_hora_boletin_corte_manana", 13),
@@ -1247,6 +1251,9 @@ def main():
                             umbral_titulo=int(umbral_titulo_c),
                             umbral_cuerpo=int(umbral_cuerpo_c),
                         )
+                        if st.session_state.get("pending_ai_config"):
+                            st.session_state["pending_ai_config"]["tono_neutro_titulo"] = list(
+                                st.session_state.get("_perfil_tono_neutro_titulo") or [])
                         st.session_state["procesando"] = True
                         st.session_state["processing_complete"] = False
                         st.rerun()
