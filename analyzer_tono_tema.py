@@ -9445,6 +9445,12 @@ def enrich_rows_with_ai(
                                                    voceros=cfg.get('voceros') or [])
         if _inst:
             _ULTIMO_RESUMEN['tipo_institucional_anuncio'] = len(_inst)
+        # 2026-11-09 (definición del cliente): política ajena a la gestión
+        # (Petro, aspirantes a la Alcaldía) => Información general.
+        _pol = aplicar_tipo_politica_ajena(grupos, etiquetas, cfg.get('tono_neutro_titulo') or [],
+                                           voceros=cfg.get('voceros') or [])
+        if _pol:
+            _ULTIMO_RESUMEN['tipo_politica_ajena'] = len(_pol)
         aplicar_tipo_por_ranking(rows, mapa, etiquetas, km, brand, aliases)
 
     # v1.10: garantía FINAL y determinista (2026-10-31): mismo Título
@@ -10895,6 +10901,33 @@ def _contiene_frase(toks, frase):
 _ELECTORAL_TITULO = re.compile(
     r'\b(candidat[oa]s?|precandidat[oa]s?|aspirantes?|candidatura|elecciones|contienda electoral|'
     r'campana electoral)\b')
+
+
+def aplicar_tipo_politica_ajena(grupos, etiquetas, terminos, voceros=()):
+    """2026-11-09 (definición del cliente): «Información general» incluye la
+    política ajena a la gestión: notas cuyo titular trata de candidatos o
+    aspirantes a la Alcaldía, o nombra a una figura del perfil
+    (`tono_neutro_titulo`, p. ej. Petro) sin nombrar a un vocero propio.
+    No toca Ranking. Devuelve los grupos cambiados."""
+    terms = [nz(t) for t in (terminos or []) if nz(t)]
+    propios = [nz(v) for v in (voceros or [])
+               if v and str(v)[:1].isupper() and len(nz(v)) >= 4]
+    cambiados = []
+
+    def _nombra(lista, t):
+        return any(re.search(r'\b' + re.escape(x) + r'\b', t) for x in lista)
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or not e.get('tipo') or e['tipo'] in ('Ranking', 'Información general'):
+            continue
+        titulos = [nz(t) for t in [g.get('titulo') or ''] + list(g.get('titulos_alt') or []) if t]
+        if not titulos:
+            continue
+        ajena = bool(terms) and all(_nombra(terms, t) and not _nombra(propios, t) for t in titulos)
+        if ajena or all(_ELECTORAL_TITULO.search(t) for t in titulos):
+            e['tipo'] = 'Información general'
+            cambiados.append(g.get('grupo'))
+    return cambiados
 
 
 def aplicar_regla_neutro_titulo(grupos, etiquetas, terminos, voceros=(), electoral=False):

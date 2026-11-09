@@ -73,7 +73,7 @@ class TestMotorTipoGenero(unittest.TestCase):
         self.assertEqual(n1['medio'], 'El Tiempo')
         self.assertTrue(n1['url_contiene_opinion'])
         self.assertIn('<tipo_y_genero>', VISTO['options'].system_prompt)
-        self.assertIn('Programas y proyectos: la gestión de la entidad', VISTO['options'].system_prompt)
+        self.assertIn('Programas y proyectos: gestión de la entidad', VISTO['options'].system_prompt)
 
     def test_sin_flag_no_pide_tipo_genero(self):
         r = mh.clasificar_con_haiku(_items(), 'Alcaldía', query_fn=fake_query)

@@ -129,3 +129,25 @@ def test_tipo_gestion_de_programa_no_es_institucional():
     az.aplicar_tipo_por_actor(grupos, et, B, A, voceros=V)
     assert et[1]['tipo'] == 'Proyectos y programas'
     assert et[2]['tipo'] == 'Institucional'
+
+
+def test_tipo_definiciones_del_cliente():
+    if not hasattr(az, 'aplicar_tipo_politica_ajena'):
+        return                                   # app sin TIPO/GÉNERO
+    grupos = [{'grupo': 1, 'titulo': '¿Uribe ve a Petro candidato a la Alcaldía de Bogotá?'},
+              {'grupo': 2, 'titulo': 'Estos son los aspirantes a la Alcaldía de Bogotá'},
+              {'grupo': 3, 'titulo': 'Alcaldía prepara reforma para fusionar entidades del Distrito'},
+              {'grupo': 4, 'titulo': 'Petro lidera ranking de favorabilidad'},
+              {'grupo': 5, 'titulo': 'Petro y Galán firman acuerdo por el metro'}]
+    et = {1: {'tipo': 'Opinión de terceros'}, 2: {'tipo': 'Institucional'}, 3: {'tipo': 'Institucional'},
+          4: {'tipo': 'Ranking'}, 5: {'tipo': 'Proyectos y programas'}}
+    cambiados = az.aplicar_tipo_politica_ajena(grupos, et, ['Petro'], voceros=['Carlos Fernando Galán', 'Galán'])
+    assert sorted(cambiados) == [1, 2]
+    assert et[1]['tipo'] == et[2]['tipo'] == 'Información general'
+    assert et[3]['tipo'] == 'Institucional' and et[4]['tipo'] == 'Ranking'
+    assert et[5]['tipo'] == 'Proyectos y programas'      # el titular nombra al alcalde
+    p = mh.system_prompt(True)
+    for trozo in ('cambios de sede, o sobre la Alcaldía o el alcalde mismos', 'Petro, Ordóñez',
+                  'aspirantes o candidatos a la Alcaldía', 'jornadas de acompañamiento, labores de la entidad',
+                  'opiniones de personas que no hacen parte de la entidad', 'rankings o listados de posicionamiento'):
+        assert trozo in p, trozo

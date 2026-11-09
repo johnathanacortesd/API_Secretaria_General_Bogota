@@ -25,6 +25,10 @@ subtemas; ahora coinciden salvo una unificación legítima.
 - **Tono**: notas cuyo titular nombra a una figura ajena del perfil
   (`tono_neutro_titulo`, hoy «Petro») y no a un vocero propio son Neutro;
   un titular de candidaturas o elecciones no sube a Positivo.
+- **TIPO, definiciones del cliente (2026-11-09)**: Institucional incluye la
+  Alcaldía y el alcalde mismos; Información general incluye la política
+  ajena (Petro, Ordóñez, aspirantes a la Alcaldía), y un titular electoral o
+  de una figura de `tono_neutro_titulo` queda en Información general.
 - **TIPO**: una fila sin `tipo` o `genero` se rechaza (antes quedaba en el
   valor por defecto y todo salía «Información general» o «Institucional»);
   definiciones con orden de decisión y ejemplos; la gestión de un programa,
