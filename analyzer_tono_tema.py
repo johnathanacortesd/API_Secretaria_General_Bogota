@@ -9391,6 +9391,10 @@ def enrich_rows_with_ai(
             if reactivas:
                 _ULTIMO_RESUMEN['tono_respuesta_a_problema_a_neutro'] = reactivas
                 incidental = list(incidental) + list(reactivas)
+            aportes = aplicar_regla_aporte_al_distrito(
+                grupos_tono, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
+            if aportes:
+                _ULTIMO_RESUMEN['tono_aporte_al_distrito'] = aportes
             restrictivas = aplicar_regla_medida_restrictiva(grupos_tono, etiquetas)
             if restrictivas:
                 _ULTIMO_RESUMEN['tono_medida_restrictiva_a_neutro'] = restrictivas
@@ -10056,6 +10060,28 @@ def _marca_protagonista(titulo: str, texto: str, actores: Sequence[str]) -> bool
     return _menciones_resolubles(titulo, texto, formas) >= 2
 
 
+_OPINION_NEG_PAT = re.compile(
+    r'\b(decepci\w*|corrupci\w*|despilfarr\w*|sobrecosto\w*|irresponsab\w*|fracas\w*|mentir\w*|'
+    r'incumpl\w*|incompeten\w*|ineficien\w*|desastre|verguenza|engan\w*|inaceptable|'
+    r'no\s+senor|chevere\s+no|sacarnos\s+mas\s+dinero|falto?\s+de|critic\w*|cuestion\w*)\b')
+
+
+def _opinion_critica_a_la_marca(e, texto, brand, aliases, voceros) -> bool:
+    """Una OPINIÓN de terceros cuya oración nombra a la marca o al vocero con
+    léxico crítico es un Negativo dirigido aunque no use un verbo de acusación
+    («Alcaldes como Carlos Fernando Galán… sacarnos más dinero… corrupción»,
+    «¡Chévere no señor Galán!»). Las guardas de Negativo no la bajan."""
+    if (e or {}).get('tipo') != 'Opinión de terceros':
+        return False
+    actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
+               if x and len(nz(x)) >= 4]
+    for o in re.split(r'(?<=[.!?;])\s+|\n+', ctrl(texto or '')):
+        no = nz(o)
+        if any(a in no for a in actores) and _OPINION_NEG_PAT.search(no):
+            return True
+    return False
+
+
 def aplicar_regla_negativo_sin_blanco(grupos: Sequence[dict], etiquetas: Dict[int, dict],
                                       brand: str, aliases: Sequence[str],
                                       voceros: Sequence[str] = ()) -> List[int]:
@@ -10077,6 +10103,8 @@ def aplicar_regla_negativo_sin_blanco(grupos: Sequence[dict], etiquetas: Dict[in
             continue
         texto = '%s. %s' % (g.get('titulo', ''), g.get('contexto') or g.get('texto', ''))
         if _marca_blanco_de_critica(texto, brand, _con_voceros(aliases, voceros)):
+            continue
+        if _opinion_critica_a_la_marca(e, texto, brand, aliases, voceros):
             continue
         if _marca_protagonista(g.get('titulo', ''), texto, actores):
             continue
@@ -10357,8 +10385,13 @@ _PROBLEMA_PAT = re.compile(
     r'reclam\w*|preocupaci\w*|riesgos?|sanci\w*|investigaci\w*|protesta\w*|paro|'
     r'suspensi\w*|deficit|hallazgo\w*|escandalo|emergencia|inconformidad\w*|sobrecostos?)\b')
 _LOGRO_TITULO_PAT = re.compile(
-    r'\b(inaugur\w*|entreg\w*|logr\w*|lanz\w*|reduj\w*|reduce\w*|celebr\w*|premi\w*|'
+    r'\b(inaugur\w*|entreg(?:o|aron|ara|aran|an|ando|ar)|entrega\s+\d+|logr\w*|lanz\w*|reduj\w*|reduce\w*|celebr\w*|premi\w*|'
     r'gano|gana|record|beneficia\w*|invierte|invirti\w*|supera\w*)\b')
+
+
+_SUBTEMA_PROBLEMA_PAT = re.compile(
+    r'^(?:recopilaci\w*|compilaci\w*|resumen\s+de\s+(?:noticias|titulares)|retras\w*|problemas?|afectaci\w*|imprevistos?|contratiempos?|dificultad\w*|obstaculo\w*|'
+    r'incumplimient\w*|aplazamient\w*|demoras?|fallas?|riesgos?|desafios?|retos?)\b')
 
 
 def aplicar_regla_respuesta_a_problema(grupos, etiquetas, brand, aliases, voceros=()):
@@ -10377,6 +10410,14 @@ def aplicar_regla_respuesta_a_problema(grupos, etiquetas, brand, aliases, vocero
         if not e or e.get('tono') != 'Positivo':
             continue
         titulo = nz(g.get('titulo') or '')
+        # El subtema nombra un problema («Retrasos en cronograma de la Línea
+        # 1»): todo el subtema es Neutro, aunque el titular no traiga verbo
+        # reactivo ni actor («Cimentación y redes públicas complican…»).
+        if _SUBTEMA_PROBLEMA_PAT.match(nz(e.get('sub_tema') or g.get('sub_tema') or g.get('subtema') or '')):
+            e['tono'] = 'Neutro'
+            e.setdefault('flags', {})['neutro_pegajoso'] = True
+            corregidos.append(g.get('grupo'))
+            continue
         if not _PROBLEMA_PAT.search(titulo) or _LOGRO_TITULO_PAT.search(titulo):
             continue
         reactivo = bool(_REACTIVO_PAT.search(titulo) and any(a in titulo for a in actores))
@@ -10392,6 +10433,40 @@ def aplicar_regla_respuesta_a_problema(grupos, etiquetas, brand, aliases, vocero
             continue
         e['tono'] = 'Neutro'
         e.setdefault('flags', {})['neutro_pegajoso'] = True
+        corregidos.append(g.get('grupo'))
+    return corregidos
+
+
+_FINANCIA_PAT = re.compile(
+    r'\b(cofinanci\w*|financiar\w*|financiara\w*|aportar\w*|aporte\w*|aportara\w*|destinar\w*|'
+    r'asignar\w*|desembols\w*|invertira\w*|impulso|pondra|avala\w*|confirma\s+recursos)\b')
+_OBJETO_DISTRITO_PAT = re.compile(r'\b(metro|bogota|distrito|distrital|regiotram|transmilenio|capital)\b')
+
+
+def aplicar_regla_aporte_al_distrito(grupos, etiquetas, brand, aliases, voceros=()):
+    """Neutro -> Positivo cuando un tercero (p. ej. el Gobierno Nacional)
+    financia, cofinancia o aporta recursos a un proyecto de Bogotá y la nota
+    nombra a la Alcaldía o al alcalde: es un beneficio para el Distrito
+    (revisión manual del dossier del 14-nov: 13 notas de la Línea 4 del
+    Metro). No sube opiniones, medidas restrictivas ni notas con problema."""
+    actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
+               if x and len(nz(x)) >= 4]
+    corregidos = []
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or e.get('tono') != 'Neutro' or (e.get('flags') or {}).get('neutro_pegajoso'):
+            continue
+        if e.get('tipo') == 'Opinión de terceros':
+            continue
+        titulo = nz(g.get('titulo') or '')
+        if not (_FINANCIA_PAT.search(titulo) and _OBJETO_DISTRITO_PAT.search(titulo)):
+            continue
+        if _PROBLEMA_PAT.search(titulo) or _MEDIDA_RESTRICTIVA_PAT.search(titulo):
+            continue
+        ctx = nz('%s %s' % (g.get('contexto') or '', g.get('texto') or ''))
+        if not any(a in ctx for a in actores):
+            continue
+        e['tono'] = 'Positivo'
         corregidos.append(g.get('grupo'))
     return corregidos
 
@@ -10441,6 +10516,8 @@ def aplicar_guarda_tono(grupos: Sequence[dict], etiquetas: Dict[int, dict],
         if not e or e.get('tono') != 'Negativo':
             continue
         texto = '%s %s' % (g['titulo'], g.get('contexto') or g.get('texto', ''))
+        if _opinion_critica_a_la_marca(e, texto, brand, aliases, voceros):
+            continue
         if _tema_negativo(texto) and not _critica_dirigida(texto, brand, _con_voceros(aliases, voceros)):
             e['tono'] = 'Neutro'
             corregidos.append(g['grupo'])
