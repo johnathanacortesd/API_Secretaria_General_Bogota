@@ -10443,6 +10443,11 @@ _FINANCIA_PAT = re.compile(
 _OBJETO_DISTRITO_PAT = re.compile(r'\b(metro|bogota|distrito|distrital|regiotram|transmilenio|capital)\b')
 
 
+_RETIRA_APOYO_PAT = re.compile(
+    r'\b(recort\w*|retir\w*|congel\w*|nieg\w*|neg[o]|frena\w*|suspend\w*|rechaz\w*|'
+    r'no\s+(?:cofinanci\w*|financ\w*|aport\w*|avala\w*|destin\w*))\b')
+
+
 def aplicar_regla_aporte_al_distrito(grupos, etiquetas, brand, aliases, voceros=()):
     """Neutro -> Positivo cuando un tercero (p. ej. el Gobierno Nacional)
     financia, cofinancia o aporta recursos a un proyecto de Bogotá y la nota
@@ -10461,7 +10466,8 @@ def aplicar_regla_aporte_al_distrito(grupos, etiquetas, brand, aliases, voceros=
         titulo = nz(g.get('titulo') or '')
         if not (_FINANCIA_PAT.search(titulo) and _OBJETO_DISTRITO_PAT.search(titulo)):
             continue
-        if _PROBLEMA_PAT.search(titulo) or _MEDIDA_RESTRICTIVA_PAT.search(titulo):
+        if (_PROBLEMA_PAT.search(titulo) or _MEDIDA_RESTRICTIVA_PAT.search(titulo)
+                or _RETIRA_APOYO_PAT.search(titulo)):
             continue
         ctx = nz('%s %s' % (g.get('contexto') or '', g.get('texto') or ''))
         if not any(a in ctx for a in actores):
@@ -11037,6 +11043,8 @@ def aplicar_regla_distrito(grupos, etiquetas, brand, aliases, voceros=()):
         if not _hecho_bueno_distrito(nt):
             continue
         if _critica_dirigida(completo, brand, _con_voceros(aliases, voceros)):
+            if _opinion_critica_a_la_marca(e, completo, brand, aliases, voceros):
+                continue
             if e.get('tono') != 'Neutro':
                 e['tono'] = 'Neutro'
                 corregidos.append(g.get('grupo'))

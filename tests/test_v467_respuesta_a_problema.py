@@ -96,5 +96,18 @@ def test_alias_nuevos_en_el_perfil():
     p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'clientes',
                      'secretaria_general_de_la_alcaldia_de_bogota.json')
     c = json.load(open(p, encoding='utf-8'))
-    assert 'Administración Distrital' in c['aliases'] and 'mandatario capitalino' in c['voceros']
+    assert 'mandatario capitalino' in c['voceros'] and 'Carlos Fernando Galán Pachón' in c['voceros']
+    # Medidos contra el dossier revisado: sin efecto neto o con riesgo de otras ciudades.
+    for x in ('Administración Distrital', 'Alcaldía Distrital', 'Gobierno Distrital'):
+        assert x not in c['aliases']
+    for x in ('alcalde mayor', 'alcalde mayor de Bogotá', 'alcalde de Bogotá'):
+        assert x not in c['voceros']
     assert 'el mandatario' not in c['voceros']  # solo, también es el Presidente
+
+
+def test_aporte_retirado_no_sube_a_positivo():
+    ctx = 'El alcalde Galán lamentó que el Gobierno retire los recursos.'
+    for t in ('Gobierno retira recursos de la Línea 4 del Metro de Bogotá',
+              'Gobierno no financiará los estudios del Metro de Bogotá',
+              'Gobierno congela aportes al Metro de Bogotá'):
+        assert _rule(a.aplicar_regla_aporte_al_distrito, t, 'x', 'Neutro', ctx) == 'Neutro', t
