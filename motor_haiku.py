@@ -798,11 +798,11 @@ async def _candidatos_consistencia(args: Dict[str, Any]) -> Dict[str, Any]:
 
 RUBRICA_TONO = """El TONO mide cómo la noticia EVALÚA o deja al CLIENTE (la marca, sus alias, sus voceros o sus entidades). No es el ánimo general de la noticia ni la gravedad del asunto, y NO depende de que el cliente aparezca o hable: que la nota nombre o cite al cliente o a su vocero no la hace Positiva. Se decide en dos pasos.
 Paso 1, el "rol": qué papel tiene el cliente en la nota.
-- gestion: la nota destaca algo CONCRETO que el cliente hizo o entrega a favor de la gente: obra entregada o con avance, programa, inversión, subsidio, jornada, servicio, operativo con resultados, alianza, estudio propio, o la atención efectiva de un problema (ayudas entregadas, emergencia atendida, servicio restablecido).
+- gestion: la nota destaca algo CONCRETO que el cliente hizo o entrega a favor de la gente: obra entregada o con avance, programa, inversión, subsidio, jornada, servicio, operativo con resultados, alianza, estudio propio, o la atención efectiva de un problema (ayudas entregadas, emergencia atendida, servicio restablecido). También es gestion cuando el hecho de la nota es un RESULTADO FAVORABLE en un asunto de su competencia (capturas, operativos con resultados, incautaciones, recuperación de bienes, baja de delitos, obra o servicio en marcha) y el cliente o una de sus entidades participa, lo coordina, lo apoya o destaca el trabajo articulado que lo hizo posible.
 - logro: la nota le atribuye un resultado o impacto favorable: reconocimiento, premio, cifra buena, respaldo o elogio de terceros.
 - critica: hay crítica, denuncia, queja, sanción, investigación o cuestionamiento DIRIGIDO al cliente, a su administración, a sus funcionarios o a su vocero.
 - afectacion: la nota le atribuye un hecho adverso que daña su imagen u operación (falla, crisis, escándalo, incumplimiento, pérdida) y no trae su voz.
-- respuesta: el cliente o su vocero RECONOCE, admite, explica, aclara, informa, advierte o responde sobre un problema, un retraso, una falla, una afectación, una emergencia o una polémica de su competencia, o fija una posición, sin que la nota destaque una gestión concreta. Hablar de algo malo no es gestión.
+- respuesta: el cliente o su vocero RECONOCE, admite, explica, aclara, informa, advierte o responde sobre un problema, un retraso, una falla, una afectación, una emergencia o una polémica de su competencia, o fija una posición, sin que la nota destaque una gestión concreta. Hablar de algo malo no es gestión. Este rol es solo para hechos adversos o polémicos: si el hecho es favorable y el cliente o su entidad lo informa, lo acompaña o destaca su labor, es gestion.
 - equilibrada: hay un señalamiento de terceros contra el cliente Y la nota trae su respuesta, descargo o versión.
 - referencial: el cliente solo aparece mencionado: dato, antecedente, fuente citada entre varias, lugar, lista o contexto. La nota no lo evalúa ni le atribuye una acción.
 Paso 2, el "tono" sale del rol: gestion y logro = Positivo; critica y afectacion = Negativo; respuesta, equilibrada y referencial = Neutro.
@@ -873,6 +873,7 @@ Ejemplos (cliente: una alcaldía):
 - "Obras del metro completan cuatro meses de atraso, advierte la interventoría" -> rol afectacion, Negativo (hecho adverso atribuido al cliente, sin su voz).
 - "La Alcaldía entregó ayudas a 120 familias afectadas por las lluvias" -> rol gestion, Positivo (atención concreta del problema).
 - "El alcalde anunció que revisará el contrato tras las denuncias de sobrecostos" -> rol equilibrada, Neutro.
+- "Capturan a cuatro integrantes de una banda; la Secretaría de Seguridad destacó el trabajo articulado entre las autoridades y la información de la ciudadanía" -> rol gestion, Positivo (resultado favorable en el que una entidad del cliente hace bien su trabajo, aunque no esté en el titular).
 guardar_clasificacion RECHAZA la fila si el rol y el tono no coinciden.
 Si el pedido trae un bloque <criterio_tono>, ese criterio del cliente MANDA en los casos que nombre: usa el tono que indique y el rol que corresponde a ese tono.
 

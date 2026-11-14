@@ -5,6 +5,24 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.37 — Labor de las secretarías y pruebas al día (2026-11-14)
+
+- **Tono: una secretaría o entidad del Distrito que hace bien su trabajo es
+  Positivo**, aunque no esté en el titular. Caso real: en una nota de
+  capturas, «Desde la Secretaría Distrital de Seguridad, Convivencia y
+  Justicia se destaca la importancia del trabajo articulado entre las
+  autoridades…» salía Neutro en la v1.36, porque la regla del «Positivo
+  incidental» no contaba a la secretaría como parte del cliente. Sigue
+  Neutro si la entidad solo es la fuente de una cifra o si el hecho es
+  adverso. Regla en el prompt, en el criterio del perfil y en el código
+  (`_entidad_distrital_en_labor`).
+- **Pruebas**: las 28 que fallaban quedan al día (725 pasan, 0 fallan). La
+  mayoría probaban reglas ya revocadas (orden de columnas del xlsx,
+  «Hecho informativo», recorte del titular como subtema válido). Tres eran
+  fallos reales: un ID entero salía como «61142010.0» en columnas
+  preservadas; una etiqueta ausente tumbaba la fidelidad final; y el rótulo
+  conservado podía llevar el nombre del medio al final.
+
 ### v1.36 — Contexto analizado por segmentos y tono «respuesta» (2026-11-14)
 
 - **Contexto analizado** (`contexto_cliente.py`): ya no son las tres primeras

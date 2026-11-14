@@ -550,7 +550,7 @@ MODELO_DEFECTO = "gpt-6-luna"
 # v4.53: sello del analizador. El encabezado de la app lo muestra junto a
 # APP_VERSION; si el despliegue muestra un sello distinto (o "sin-sello"),
 # el contenedor NO corre este archivo aunque el encabezado diga otra versión.
-ANALYZER_BUILD = "v4.75-contexto-segmentos"  # v4.62: ancla de riesgo + clases de sinonimia
+ANALYZER_BUILD = "v4.76-labor-distrital"  # v4.62: ancla de riesgo + clases de sinonimia
 # v4.53: solo cambia el sello (la lógica del analizador no se toca en esta versión;
 # el cambio es de interfaz).
 JEV_URL_DEFECTO = "https://api.typesafe.ai/v1/systemone"
@@ -10188,6 +10188,11 @@ def aplicar_regla_positivo_incidental(grupos: Sequence[dict], etiquetas: Dict[in
         # sea una sola mención (criterio del usuario).
         if _marca_sujeto_de_gestion(texto, actores):
             continue
+        # 2026-11-14: con el perfil del Distrito, la labor de una secretaría
+        # o entidad adscrita también es del cliente: no es incidental.
+        if solo_gestion and (_entidad_distrital_gestiona(texto)
+                             or _entidad_distrital_en_labor(texto)):
+            continue
         # ¿La guarda positiva encontraría evidencia real sobre la marca en
         # este contenido? Se prueba sobre una copia en Neutro para reutilizar
         # toda su lógica (fuente experta, sede, participación, autoría...).
@@ -10391,6 +10396,41 @@ def _entidad_distrital_gestiona(texto: str) -> bool:
     return False
 
 
+# 2026-11-14 (regla del usuario): una secretaría o entidad del Distrito que
+# hace un buen trabajo es Positivo, aunque no sea el sujeto gramatical de un
+# verbo de gestión. Caso real: «Desde la Secretaría Distrital de Seguridad,
+# Convivencia y Justicia se destaca la importancia del trabajo articulado
+# entre las autoridades y de la información que aporta la ciudadanía…»,
+# en una nota de capturas, salía Neutro: la regla del Positivo incidental lo
+# bajaba porque la secretaría no estaba entre los actores de la marca.
+_LABOR_DISTRITAL_PAT = re.compile(
+    r'\b(?:trabajo (?:articulado|conjunto|coordinado)|articulacion|articulad[oa]s? con|'
+    r'en coordinacion|coordinad[oa]s? con|de la mano|con (?:el )?apoyo de|acompan\w*|'
+    r'destac\w*|resalt\w*|gracias a|permiti(?:o|eron)|logr\w*|captur\w*|incaut\w*|'
+    r'recuper\w*|desarticul\w*|reduc\w*|reduj\w*|disminu\w*|fortalec\w*|refuerz\w*|'
+    r'reforz\w*|entreg\w*|benefici\w*|capacit\w*)')
+_FUENTE_DE_DATO_PAT = re.compile(
+    r'\b(?:segun|de acuerdo con|conforme a)\s+(?:las?\s+|los?\s+|el\s+)?'
+    r'(?:cifras|datos|reporte|informe|informacion|registros|estadisticas)\b')
+
+
+def _entidad_distrital_en_labor(texto: str) -> bool:
+    """Una secretaría o entidad del Distrito aparece en una oración que
+    destaca su labor (trabajo articulado, resultados, apoyo, entrega) y esa
+    oración no es adversa ni la cita solo como fuente de un dato."""
+    import contexto_cliente as _cc
+    t = _CARGO_HISTORICO_PAT.sub(' XAJENAX ', ctrl(texto or ''))
+    ent = re.compile(_ENTIDAD_DISTRITAL_PAT)
+    for oracion in _cc.partir_oraciones(t):
+        n = nz(oracion)
+        if not ent.search(n) or not _LABOR_DISTRITAL_PAT.search(n):
+            continue
+        if _ADVERSO_PAT.search(n) or _FUENTE_DE_DATO_PAT.search(n):
+            continue
+        return True
+    return False
+
+
 # Titular con «Bogotá» o el Distrito como sujeto de una gestión («Bogotá
 # nombra nueva líder social», «Bogotá abre convocatoria», «Bogotá invita a
 # prevenir…»): Positivo en las notas etiquetadas a mano.
@@ -10437,6 +10477,7 @@ def aplicar_regla_secretarias_distritales(grupos, etiquetas, brand, aliases, voc
         actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
                    if x and len(nz(x)) >= 4]
         if (_entidad_distrital_gestiona(texto)
+                or _entidad_distrital_en_labor(texto)
                 or _marca_sujeto_de_gestion(texto, actores)
                 or _titular_distrito_gestiona(titulo)):
             e['tono'] = 'Positivo'

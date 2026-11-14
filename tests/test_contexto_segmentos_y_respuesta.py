@@ -232,6 +232,44 @@ def test_donde_no_es_un_hecho_bueno_del_distrito():
     assert az._hecho_bueno_distrito(az.nz('La Alcaldía donó 200 computadores'))
 
 
+# ─── Tono: una secretaría que hace bien su trabajo es Positivo ─────────────
+
+CITA_SEGURIDAD = (
+    '"Desde la Secretaría Distrital de Seguridad, Convivencia y Justicia se destaca la importancia '
+    'del trabajo articulado entre las autoridades y de la información que aporta la ciudadanía para '
+    'identificar actividades sospechosas y facilitar las investigaciones. Cualquier persona que '
+    'tenga conocimiento de hechos delictivos puede reportarlos a través de la Línea de Emergencias '
+    '123 o acudir al CAI más cercano", agregó la dependencia de la Alcaldía de Bogotá.')
+CAPTURAS = ('La Policía Metropolitana de Bogotá capturó a cuatro presuntos integrantes de la banda '
+            'Los Motos, señalados de hurtar vehículos en Kennedy y Bosa. En el operativo se '
+            'recuperaron tres motocicletas y dos automóviles. Los detenidos fueron dejados a '
+            'disposición de la Fiscalía.\n' + CITA_SEGURIDAD)
+
+
+def test_secretaria_que_destaca_trabajo_articulado_es_positivo():
+    """Caso real (v1.36 lo dejaba Neutro): la regla del Positivo incidental
+    bajaba la nota porque la secretaría no era un «actor» de la marca."""
+    tit = 'Capturan a banda dedicada al hurto de vehículos en Kennedy'
+    ctx, meta = az.contexto_por_segmentos({'Título': tit, 'CuerpoEs': CAPTURAS}, KM, _det())
+    assert 'se destaca la importancia del trabajo articulado' in ctx
+    assert any('entidad adscrita' in m for m in meta['menciones'])
+    for tono_modelo in ('Neutro', 'Positivo'):
+        assert _reglas(tit, ctx, tono_modelo) == 'Positivo', tono_modelo
+    assert az._entidad_distrital_en_labor(CITA_SEGURIDAD)
+    # No aplica si el hecho de la nota es adverso…
+    assert _reglas('Denuncian aumento de hurtos en Kennedy', ctx, 'Positivo') == 'Neutro'
+    # …ni si la entidad solo es la fuente de una cifra.
+    cifra = ('La Policía capturó a seis personas. Según cifras de la Secretaría de Seguridad, '
+             'los hurtos se redujeron 8 % este año.')
+    assert not az._entidad_distrital_en_labor(cifra)
+    assert _reglas('Capturan a banda en Kennedy', cifra, 'Neutro') == 'Neutro'
+    # …ni si la oración de la entidad es una crítica o un retraso.
+    assert not az._entidad_distrital_en_labor(
+        'La Secretaría de Movilidad reconoció retrasos pese a que se reforzó la señalización.')
+    assert 'destacó el trabajo articulado' in mh.SYSTEM_PROMPT
+    assert 'hace bien su trabajo es Positivo' in PERFIL['criterio_custom']
+
+
 # ─── Motor Haiku: rol «respuesta», hecho y menciones ──────────────────────
 
 def test_rol_respuesta_es_neutro_y_esta_en_los_prompts():
