@@ -5,7 +5,7 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
-### Contexto analizado por segmentos y tono «respuesta» (2026-11-14)
+### v1.36 — Contexto analizado por segmentos y tono «respuesta» (2026-11-14)
 
 - **Contexto analizado** (`contexto_cliente.py`): ya no son las tres primeras
   oraciones con la marca. Se ubican TODAS las menciones del cliente en el
