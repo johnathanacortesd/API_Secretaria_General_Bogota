@@ -56,30 +56,37 @@ class TestCopiaRealSeRepara(unittest.TestCase):
 
     def test_titular_verbatim_se_repara_determinista(self):
         t = "¡Atención! Yamid Amat fue hospitalizado en Bogotá y permanece en UCI"
-        nuevo = A.reparar_subtema_determinista(t, t)
-        self.assertTrue(nuevo)
-        self.assertNotIn('¡', nuevo)
-        self.assertLessEqual(len(nuevo.split()), 7)
-        self.assertEqual(duros(A.validar(nuevo, 'Neutro', [t])), [])
+        # v4.67: un trozo contiguo del titular (>=3 palabras de contenido) siempre es copia: el recorte del titular («Hospitalizado en Bogotá y
+        # permanece en UCI») ya no es una reparación válida; el caso pasa
+        # a la reformulación con el modelo.
+        self.assertEqual(A.reparar_subtema_determinista(t, t), '')
+        recorte = A._subtema_desde_titulo(t)
+        self.assertNotIn('¡', recorte)
+        self.assertLessEqual(len(recorte.split()), 7)
+        self.assertIn('copia_titular', duros(A.validar(recorte, 'Neutro', [t])))
 
     def test_cita_como_etiqueta_se_repara(self):
         # Caso real del dossier Fundación Santa Fe.
         s = '"Septiembre era el momento perfecto"'
         t = ('Lina Tejeiro revela detalles del nacimiento de su hijo Gael: '
              '"Septiembre era el momento perfecto"')
-        nuevo = A.reparar_subtema_determinista(s, t)
-        self.assertTrue(nuevo)
-        self.assertNotIn('"', nuevo)
-        # El hecho está en el segmento previo a la cita, sin verbo inicial.
-        self.assertEqual(nuevo, "Detalles del nacimiento de su hijo Gael")
+        # El hecho está en el segmento previo a la cita, sin verbo inicial…
+        recorte = A._subtema_desde_titulo(t)
+        self.assertEqual(recorte, "Detalles del nacimiento de su hijo Gael")
+        self.assertNotIn('"', recorte)
+        # …pero es un trozo literal del titular (v4.67): no se acepta como
+        # reparación sin modelo.
+        self.assertEqual(A.reparar_subtema_determinista(s, t), '')
 
     def test_pregunta_como_etiqueta_se_repara(self):
         s = "¿Cuántos años tiene Yamid Amat?"
         t = "¿Cuántos años tiene Yamid Amat? Inició en la radio a los 20"
-        nuevo = A.reparar_subtema_determinista(s, t)
-        self.assertTrue(nuevo)
-        self.assertNotIn('?', nuevo)
-        self.assertNotIn('¿', nuevo)
+        recorte = A._subtema_desde_titulo(t)
+        self.assertTrue(recorte)
+        self.assertNotIn('?', recorte)
+        self.assertNotIn('¿', recorte)
+        # v4.67: el recorte literal no es reparación; va al modelo.
+        self.assertEqual(A.reparar_subtema_determinista(s, t), '')
 
     def test_cita_parcial_en_etiqueta_nominal_se_descomilla(self):
         # v4.34 (regla del usuario: el subtema jamás lleva comillas): la cita
@@ -139,7 +146,8 @@ class TestSubtemaDesdeTitulo(unittest.TestCase):
         self.assertNotIn('¿', r)
 
     def test_solo_preguntas(self):
-        self.assertEqual(A._subtema_desde_titulo("¿Quién? ¿Cómo?"), "Hecho informativo")
+        # v1.18: 'Hecho informativo' ya no es un subtema aceptado.
+        self.assertEqual(A._subtema_desde_titulo("¿Quién? ¿Cómo?"), "")
 
     def test_recorta_verbo_inicial_tras_corte(self):
         r = A._subtema_desde_titulo(
@@ -147,8 +155,9 @@ class TestSubtemaDesdeTitulo(unittest.TestCase):
         self.assertFalse(r.split()[0].lower() in A._VERBO_INFO_SING)
 
     def test_vacio(self):
-        self.assertEqual(A._subtema_desde_titulo(""), "Hecho informativo")
-        self.assertEqual(A._subtema_desde_titulo(None), "Hecho informativo")
+        self.assertEqual(A._subtema_desde_titulo(""), "")
+        self.assertNotIn(A._subtema_especifico("", []), ("", "Hecho informativo"))
+        self.assertEqual(A._subtema_desde_titulo(None), "")
 
     def test_conserva_siglas(self):
         r = A._subtema_desde_titulo(
@@ -189,8 +198,10 @@ class TestIntegracionReparacion(unittest.TestCase):
                     reparados[f['grupo']] = nuevo
                     continue
             pendientes.append(f)
-        self.assertEqual([f['grupo'] for f in pendientes], [3])
-        self.assertEqual(set(reparados), {1, 2})
+        # El caso 2 (cita tras «:» con un segmento previo sin hecho) no
+        # tiene reparación determinista desde v1.18: pasa al modelo.
+        self.assertEqual([f['grupo'] for f in pendientes], [2, 3])
+        self.assertEqual(set(reparados), {1})
         for g, nuevo in reparados.items():
             tit = [f['titulo'] for f in fallos if f['grupo'] == g][0]
             self.assertEqual(duros(A.validar(nuevo, 'Neutro', [tit])), [])

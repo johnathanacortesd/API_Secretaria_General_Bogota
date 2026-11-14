@@ -76,7 +76,11 @@ class TestSubtemaDesdeTitulo(unittest.TestCase):
                          "Ascenso político de Estefanel Gutiérrez")
 
     def test_vacio(self):
-        self.assertTrue(_subtema_desde_titulo(""))
+        # v1.18: 'Hecho informativo' ya no es un subtema aceptado; sin
+        # titular no hay rótulo y el respaldo lo da _subtema_especifico.
+        import analyzer_tono_tema as _a
+        self.assertEqual(_subtema_desde_titulo(""), "")
+        self.assertNotIn(_a._subtema_especifico("", []), ("", "Hecho informativo"))
 
 
 class TestRepararSubtemasAjenos(unittest.TestCase):

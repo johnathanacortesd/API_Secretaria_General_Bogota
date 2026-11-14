@@ -71,8 +71,13 @@ class TestSubtemaSinHecho(unittest.TestCase):
             self.assertFalse(A._es_subtema_sin_hecho(sub), sub)
             self.assertNotIn('subtema_sin_hecho',
                              A.validar(sub, 'Positivo', [tit]), sub)
-            self.assertNotIn('copia_titular',
-                             A.validar(sub, 'Positivo', [tit]), sub)
+            # v4.67: el único recorte contiguo de la lista sí es copia.
+            if sub == "Estado de salud de Yamid Amat":
+                self.assertIn('copia_titular',
+                              A.validar(sub, 'Positivo', [tit]), sub)
+            else:
+                self.assertNotIn('copia_titular',
+                                 A.validar(sub, 'Positivo', [tit]), sub)
 
 
 class TestDesdeTituloSinLlamado(unittest.TestCase):
@@ -83,10 +88,14 @@ class TestDesdeTituloSinLlamado(unittest.TestCase):
         self.assertFalse(A._es_subtema_sin_hecho(r))
 
     def test_titulo_sin_hecho_final_cae_a_hecho_informativo(self):
-        r = A._subtema_desde_titulo(
-            "Jornadas de empleo de Comfenalco Valle en Restrepo, "
-            "Buenaventura y Cali")
-        self.assertEqual(r, 'Hecho informativo')
+        # v1.18: 'Hecho informativo' ya no es un subtema aceptado. El
+        # titular no da rótulo y el respaldo es uno específico.
+        tit = ("Jornadas de empleo de Comfenalco Valle en Restrepo, "
+               "Buenaventura y Cali")
+        self.assertEqual(A._subtema_desde_titulo(tit), '')
+        esp = A._subtema_especifico(tit, [])
+        self.assertNotIn(esp, ('', 'Hecho informativo'))
+        self.assertIn('Jornadas', esp)
 
     def test_reparacion_determinista_del_caso_reportado(self):
         r = A.reparar_subtema_determinista("Conozca cuándo será", TIT_FERIA)
@@ -160,7 +169,9 @@ class TestPuertaFinalSinHecho(unittest.TestCase):
                          'tono': 'Positivo'}}
         rows = [{'Título': TIT_FERIA, 'Medio': 'Elpais.com.co'}]
         A.reparar_copias_finales({}, grupos, etiquetas, rows, {0: 1}, {})
-        self.assertEqual(etiquetas[1]['sub_tema'], 'Hecho informativo')
+        # v1.18: nunca 'Hecho informativo'; el respaldo nombra el evento
+        # del titular, no la cola de llamado ni un adjetivo suelto.
+        self.assertEqual(etiquetas[1]['sub_tema'], 'Feria Laboral de Cali')
 
 
 if __name__ == '__main__':

@@ -36,19 +36,25 @@ class TestIdentidadTitular(unittest.TestCase):
         self.assertIn("copia_titular", pr)
 
     def test_solapamiento_parcial_valido_no_se_marca(self):
-        # v4.21 se preserva: etiqueta válida que coincide con PARTE del
-        # titular no es copia perezosa.
+        # v4.21 se preserva solo para el solapamiento NO contiguo: una
+        # etiqueta válida con palabras del titular en orden y con huecos.
+        pr = A.validar("Conexión entre educación media y superior", "Neutro",
+                       ["La sustancial conexión entre la educación media y la superior",
+                        "cuerpo"])
+        self.assertNotIn("copia_titular", pr)
+        # v4.67: un trozo contiguo del titular (>=3 palabras de contenido) siempre es copia.
         s = "Estado de salud de Yamid Amat"
         t = "Actualización sobre el estado de salud de Yamid Amat"
-        pr = A.validar(s, "Neutro", [t, "cuerpo"])
-        self.assertNotIn("copia_titular", pr)
+        self.assertIn("copia_titular", A.validar(s, "Neutro", [t, "cuerpo"]))
 
     def test_reparacion_identidad_titulo_largo(self):
         t = "Esto es lo que cambia con la reforma pensional: Casa Blu del 26 de septiembre"
-        nuevo = A.reparar_subtema_determinista(t, t)
-        self.assertTrue(nuevo)
-        self.assertNotEqual(A.nz(nuevo), A.nz(t))
-        self.assertNotIn("copia_titular", A.validar(nuevo, "Neutro", [t, "cuerpo"]))
+        # v4.67: el recorte del titular («Cambia con la reforma pensional»)
+        # sigue siendo copia; sin modelo no hay reparación determinista.
+        self.assertEqual(A.reparar_subtema_determinista(t, t), "")
+        recorte = A._subtema_desde_titulo(t)
+        self.assertNotEqual(A.nz(recorte), A.nz(t))
+        self.assertIn("copia_titular", A.validar(recorte, "Neutro", [t, "cuerpo"]))
 
     def test_reparacion_identidad_titulo_corto_nominal_va_a_llm(self):
         # Sin reformulación honesta posible: '' → la vuelta LLM reformula.

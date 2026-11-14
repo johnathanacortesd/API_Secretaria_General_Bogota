@@ -1710,6 +1710,11 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
                 if isinstance(val, str) and val.startswith("http"):
                     cv = "Link"
                     url = val
+                elif (isinstance(val, float) and math.isfinite(val)
+                      and val.is_integer()):
+                    # El lector entrega los enteros como float: un ID
+                    # 61142010 no puede salir como "61142010.0".
+                    cv = str(int(val))
                 else:
                     cv = str(val)
 

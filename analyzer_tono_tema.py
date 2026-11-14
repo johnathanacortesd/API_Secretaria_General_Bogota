@@ -3607,6 +3607,15 @@ def _subtema_desde_titulo(titulo: str) -> str:
                              or nz(pals[0]) in _VERBO_INFO_SING
                              or _empieza_con_verbo(pals)):
         pals = pals[1:]
+    # Si el recorte quedó encabezado por un adjetivo o participio
+    # («disponibles en la Feria Laboral de Cali»), el rótulo empieza en el
+    # nombre del evento que trae: «Feria Laboral de Cali».
+    if len(pals) > 2 and nz(pals[0]).endswith(
+            ('ado', 'ada', 'ados', 'adas', 'ido', 'ida', 'idos', 'idas',
+             'ible', 'ibles', 'able', 'ables')):
+        _k = next((k for k, w in enumerate(pals) if k and nz(w) in _EVENTO_NOMBRE), 0)
+        if _k and len(pals) - _k >= 2:
+            pals = pals[_k:]
     t = ' '.join(pals)
     if t and t == t.upper() and any(c.isalpha() for c in t):
         # Conserva siglas (IA, PAE); nexos y resto a frase normal: primera
@@ -4020,7 +4029,7 @@ def aplicar_fidelidad_final_subtema(rows, mapa, etiquetas, ajustes_subtema,
         # gid=0 es un id válido (el motor real numera desde 1, pero no se
         # asume): solo None significa "sin grupo". El `if gid` de la guarda
         # original lo trataría como ausente y saltaría la fila.
-        e = etiquetas.get(gid) if gid is not None else {}
+        e = (etiquetas.get(gid) if gid is not None else None) or {}
         if i in ajustes and nz(ajustes[i]):
             sub = ajustes[i]
         else:
@@ -7828,6 +7837,21 @@ def aplicar_pkl_del_cliente(
     return applied
 
 
+def _sin_cola_de_medio(rotulo: str, medios: Sequence[str] = ()) -> str:
+    """Quita del final del rótulo la firma del medio: « - CAMBIO COLOMBIA»
+    (cola en mayúsculas tras un guion o barra) o el nombre de un medio del
+    grupo. Si no quedan al menos dos palabras, devuelve el rótulo tal cual."""
+    r = str(rotulo or '').strip()
+    m = re.search(r'\s+[-–—|]\s+([^-–—|]{2,45})$', r)
+    if not m:
+        return r
+    cola = m.group(1).strip()
+    medios_n = {nz(re.sub(r'\([^)]*\)', '', str(x or ''))) for x in (medios or []) if x}
+    es_medio = (cola == cola.upper() and any(c.isalpha() for c in cola)) or nz(cola) in medios_n
+    resto = r[:m.start()].strip()
+    return resto if es_medio and len(resto.split()) >= 2 else r
+
+
 def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
                            etiquetas: Dict[int, dict], rows: List[dict],
                            mapa: Dict[int, int], km: dict,
@@ -8037,7 +8061,15 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
             if not _resp_malo and _haiku_mode:
                 _resp_malo = bool(_forma_haiku(_resp, _f['titulo'],
                                                (grupo_por_id.get(_gid) or {}).get('contexto_marca') or ''))
-            etiquetas[_gid]['sub_tema'] = _f['sub_tema'] if _resp_malo else _resp
+            if _resp_malo:
+                # Se conserva el rótulo original, pero nunca con el nombre
+                # del medio pegado al final («… - CAMBIO COLOMBIA»).
+                _resp = _sin_cola_de_medio(
+                    _f['sub_tema'],
+                    [rows[_i].get((km or {}).get('medio', 'Medio')) or rows[_i].get('Medio')
+                     for _i in ((grupo_por_id.get(_gid) or {}).get('idxs') or [])
+                     if 0 <= _i < len(rows)])
+            etiquetas[_gid]['sub_tema'] = _resp
             sin_reparar += 1
     for _f in fallos_fila:
         _i = _f['_fila']

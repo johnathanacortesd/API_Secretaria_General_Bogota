@@ -52,9 +52,16 @@ class TestCasiIdentidad(unittest.TestCase):
         self.assertFalse(az._es_copia_casi_identica(
             "Estado de salud de Yamid Amat",
             "Actualización sobre el estado de salud de Yamid Amat en clínica"))
+        # No es casi-identidad, pero sí un trozo contiguo del titular
+        # (v4.67): se marca como copia.
         self.assertEqual(
             az.validar("Estado de salud de Yamid Amat", 'Neutro',
                        ["Actualización sobre el estado de salud de Yamid Amat en clínica"]),
+            ['copia_titular'])
+        # El solapamiento con huecos sigue siendo una síntesis válida.
+        self.assertEqual(
+            az.validar("Conexión entre educación media y superior", 'Neutro',
+                       ["La sustancial conexión entre la educación media y la superior"]),
             [])
 
     def test_parafrasis_no_es_copia(self):

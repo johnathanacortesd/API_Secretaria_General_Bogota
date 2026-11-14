@@ -16,8 +16,11 @@ class TestLunaUnico(unittest.TestCase):
         with open(os.path.join(RAIZ, "app.py"), encoding="utf-8") as f:
             cls.src = f.read()
 
-    def test_version_es_v449(self):
-        self.assertIn('APP_VERSION = "v4.49"', self.src)
+    def test_version_declarada(self):
+        # Esta app tiene su propia numeración (v1.x); la regla de v4.49
+        # que se conserva es el modelo fijo, no el número de versión.
+        import re
+        self.assertRegex(self.src, re.compile(r'^APP_VERSION = "v\d+\.\d+"$', re.M))
 
     def test_sin_otros_modelos_en_app(self):
         self.assertNotIn("gpt-6-sol", self.src)

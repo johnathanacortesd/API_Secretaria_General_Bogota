@@ -83,18 +83,16 @@ class TestCreditoCuentaYTextoCorto(unittest.TestCase):
 
 class TestCasoReal61636572(unittest.TestCase):
     def test_fila_reportada_extracto_es_el_credito(self):
-        import openpyxl
-        wb = openpyxl.load_workbook(
-            "/home/hatch/workspace/user/files/"
-            "Dossier_comfenalco_20261029_2202.xlsx",
-            read_only=True, data_only=True)
-        ws = wb['Resultado']
-        rows = list(ws.iter_rows(values_only=True))
-        hdr = list(rows[0])
-        data = {str(r[0]): dict(zip(hdr, r)) for r in rows[1:]}
-        r = data['61636572']
-        cuerpo = str(r['Resumen - Aclaracion'])
-        tit = str(r['Título'])
+        # La fila real venía de un xlsx que solo existía en la máquina
+        # donde se escribió la prueba. Se reproduce su forma: una nota
+        # larga cuya única mención de la marca es el crédito de la foto.
+        tit = "Guacarí celebra sus fiestas patronales con desfile y feria"
+        relleno = " ".join(
+            "El municipio organizó el evento número %d con apoyo de la "
+            "comunidad y de los comerciantes del parque principal." % n
+            for n in range(1, 31))
+        cuerpo = ("Guacarí Foto:Comfenalco Valle del Cauca. " + relleno)
+        self.assertGreater(len(cuerpo), 3000)
         ctx = A._contexto_exacto_marca(
             cuerpo, tit, "Comfenalco", ["Confenalco", "Comfenalco Valle"])
         self.assertIn("Foto:Comfenalco", ctx)

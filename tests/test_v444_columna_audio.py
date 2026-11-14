@@ -47,6 +47,8 @@ def _dossier_audio():
     return bio.getvalue()
 
 
+COLA = ["texto", "Audio", "Link Ext", "Web Ext"]
+
 class TestColumnaAudioV444(unittest.TestCase):
     def test_audio_solo_radio_y_television(self):
         df = load_dossier_dataframe(_dossier_audio())
@@ -60,26 +62,28 @@ class TestColumnaAudioV444(unittest.TestCase):
         self.assertEqual(por_titulo["Nota web"], "")
 
     def test_audio_al_final_en_todos_los_modos(self):
-        self.assertEqual(output_columns_for_export()[-1], "Audio")
+        # Cola vigente del xlsx (v4.56-v4.58): ..., texto, Audio, Link Ext,
+        # Web Ext, en todos los modos.
+        self.assertEqual(output_columns_for_export()[-4:], COLA)
         self.assertEqual(
-            output_columns_for_export(include_ai=True)[-1], "Audio")
+            output_columns_for_export(include_ai=True)[-4:], COLA)
         self.assertEqual(
             output_columns_for_export(include_ai=True,
-                                      include_prominencia=True)[-2:],
-            ["Prominencia", "Audio"])
-        # El resto del orden no cambia: Audio solo se agrega al final.
-        sin_audio = [c for c in output_columns_for_export(include_ai=True)
-                     if c != "Audio"]
-        self.assertEqual(sin_audio[-1], "Contexto analizado")
+                                      include_prominencia=True)[-5:],
+            ["Prominencia"] + COLA)
+        # El resto del orden no cambia: la cola solo se agrega al final.
+        sin_cola = [c for c in output_columns_for_export(include_ai=True)
+                    if c not in COLA]
+        self.assertEqual(sin_cola[-1], "Contexto analizado")
 
     def test_columnas_preservadas_audio_al_final(self):
         cols = _columnas_preservadas(["ID", "TÍTULO"], include_ai=True)
-        self.assertEqual(cols[-1], "Audio")
-        # No duplica si el xlsx de entrada ya trae la columna (se conserva
-        # en su posición original, como el resto de columnas de entrada).
+        self.assertEqual(cols[-4:], COLA)
+        # No duplica si el xlsx de entrada ya trae la columna; desde v4.56
+        # "texto" y "Audio" van siempre al final, en ese orden.
         cols2 = _columnas_preservadas(["ID", "Audio"], include_ai=True)
         self.assertEqual(cols2.count("Audio"), 1)
-        self.assertEqual(cols2[1], "Audio")
+        self.assertEqual(cols2[-4:], COLA)
 
     def test_e2e_audio_ultima_columna_con_urls(self):
         res = process_dossier(io.BytesIO(_dossier_audio()), {}, {},
@@ -87,8 +91,8 @@ class TestColumnaAudioV444(unittest.TestCase):
         wb = load_workbook(io.BytesIO(res["output_data"]))
         ws = wb.active
         headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        self.assertEqual(headers[-1], "Audio")
-        idx_audio = len(headers) - 1
+        self.assertEqual(headers[-4:], COLA)
+        idx_audio = headers.index("Audio")
         idx_titulo = headers.index("Título")
         valores = {}
         for row in ws.iter_rows(min_row=2, values_only=True):
