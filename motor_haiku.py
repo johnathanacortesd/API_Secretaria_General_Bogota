@@ -38,6 +38,7 @@ MODELO_HAIKU = "claude-haiku-5-5"
 POR_PAGINA = 25           # noticias por llamada a leer_noticias
 TOPE_TEXTO = 1200         # caracteres de contexto por noticia
 TOPE_TITULO = 160
+TOPE_HECHO = 320           # entrada de la noticia (el hecho principal)
 TOPE_ETIQUETA_TITULO = 90  # título en leer_noticias: solo etiqueta de agrupación
 UMBRAL_TITULO = 0.92
 UMBRAL_CONTEXTO = 0.85
@@ -64,6 +65,9 @@ ROLES = {
     "logro": "Positivo",         # reconocimiento o impacto favorable que se le atribuye
     "critica": "Negativo",       # crítica, denuncia, sanción o cuestionamiento dirigido
     "afectacion": "Negativo",    # falla, crisis o impacto adverso que se le atribuye
+    # 2026-11-14: el cliente reconoce, explica o responde por un problema, o
+    # fija una posición, sin gestión concreta. Que hable no lo hace Positivo.
+    "respuesta": "Neutro",
     "equilibrada": "Neutro",     # señalamiento con respuesta o descargo del cliente
     "referencial": "Neutro",     # mención de paso: dato, fuente, antecedente, contexto
 }
@@ -71,7 +75,7 @@ PARALELO_DEFECTO = 4      # agentes clasificadores en paralelo (dossiers grandes
 MIN_PAGINAS_PARALELO = 4  # con menos páginas clasifica un solo agente
 LOTE_AUDITOR = 20         # filas por llamada del auditor de tono
 MAX_AUDITOR = 160         # tope de filas auditadas por corrida
-TOPE_CTX_AUDITOR = 700
+TOPE_CTX_AUDITOR = 1000
 
 # Progreso para la app (las tools corren en este mismo proceso).
 PROGRESO: Dict[str, Any] = {}
@@ -374,6 +378,29 @@ def menciona_cliente(texto: str, terminos: Optional[Sequence[str]] = None) -> bo
     return any(" %s " % x in t for x in terminos)
 
 
+def _nombra_cliente(d: dict) -> bool:
+    """True si la noticia nombra al cliente. Manda lo que ubicó el analizador
+    (incluye el cargo del alcalde y las entidades adscritas); sin ese dato,
+    la coincidencia literal de marca, alias y voceros."""
+    if d.get("mencion_cliente") is not None:
+        return bool(d["mencion_cliente"])
+    return menciona_cliente(str(d.get("titulo") or "") + " " + str(d.get("contexto") or ""))
+
+
+# Hecho adverso en el titular: un Positivo con esto se audita (¿hay gestión
+# concreta o el cliente solo reconoce, explica o responde?).
+_ADVERSO_TITULO = re.compile(
+    r"\b(?:reconoc|admit|acept|explic|aclar|respond|defiend|defend|justific|lament|afectaci|"
+    r"retras|demor|atras[oa]|falla|crisis|emergencia|sobrecost|incumpl|polemic|critic(?:a|an|aron|ad)|"
+    r"cuestion|"
+    r"denunci|quej|reclam|protest|caos|colaps|trancon|riesgo|deficit|aument\w* de (?:hurt|homicid|"
+    r"robo|delit)|insegur)\w*")
+
+
+def titulo_adverso(titulo: str) -> bool:
+    return bool(_ADVERSO_TITULO.search(_simple(titulo)))
+
+
 def preparar_estado(items: Sequence[dict], incluir_tema: bool,
                     taxonomia: Optional[Sequence[str]] = None,
                     progreso_cb: Optional[Callable[[int, str], None]] = None,
@@ -395,7 +422,10 @@ def preparar_estado(items: Sequence[dict], incluir_tema: bool,
         fid = str(it["id"])
         orden.append(fid)
         titulo = str(it.get("titulo") or "")
-        datos[fid] = {"id": fid, "titulo": titulo, "contexto": str(it.get("contexto") or "")}
+        datos[fid] = {"id": fid, "titulo": titulo, "contexto": str(it.get("contexto") or ""),
+                      "hecho": str(it.get("hecho") or "").strip(),
+                      "menciones": [str(x) for x in (it.get("menciones") or []) if str(x).strip()],
+                      "mencion_cliente": it.get("mencion_cliente")}
         if isinstance(it.get("previa"), dict):
             previas_in[fid] = it["previa"]
         for clave_item, _ in CAMPOS_CORTOS:
@@ -498,8 +528,13 @@ def _lista_envio() -> List[dict]:
         if dup is not None:
             reg["igual_a"] = _raiz(fid)
         else:
-            if not menciona_cliente(d["titulo"] + " " + d["contexto"]):
+            if not _nombra_cliente(d):
                 reg["sin_mencion_literal"] = True
+            if d.get("menciones"):
+                reg["menciones_cliente"] = d["menciones"][:8]
+            # La entrada de la noticia (el hecho), si el contexto no la trae ya.
+            if d.get("hecho") and _simple(d["hecho"])[:80] not in _simple(d["contexto"]):
+                reg["hecho"] = d["hecho"][:TOPE_HECHO]
             reg["contexto"] = d["contexto"][:TOPE_TEXTO]
             if _ESTADO.get("con_tipo_genero"):
                 for clave_item, clave_salida in CAMPOS_CORTOS:
@@ -761,20 +796,24 @@ async def _candidatos_consistencia(args: Dict[str, Any]) -> Dict[str, Any]:
 
 # ─── prompts ──────────────────────────────────────────────────────────────
 
-RUBRICA_TONO = """El TONO mide cómo la noticia EVALÚA o deja al CLIENTE (la marca, sus alias o sus voceros). No es el ánimo general de la noticia ni la gravedad del asunto. Se decide en dos pasos.
+RUBRICA_TONO = """El TONO mide cómo la noticia EVALÚA o deja al CLIENTE (la marca, sus alias, sus voceros o sus entidades). No es el ánimo general de la noticia ni la gravedad del asunto, y NO depende de que el cliente aparezca o hable: que la nota nombre o cite al cliente o a su vocero no la hace Positiva. Se decide en dos pasos.
 Paso 1, el "rol": qué papel tiene el cliente en la nota.
-- gestion: el cliente o su vocero HACE algo que la nota presenta a su favor: gestión, obra, programa, inversión, alianza, estudio, informe, pronunciamiento, o actúa frente a un problema.
+- gestion: la nota destaca algo CONCRETO que el cliente hizo o entrega a favor de la gente: obra entregada o con avance, programa, inversión, subsidio, jornada, servicio, operativo con resultados, alianza, estudio propio, o la atención efectiva de un problema (ayudas entregadas, emergencia atendida, servicio restablecido).
 - logro: la nota le atribuye un resultado o impacto favorable: reconocimiento, premio, cifra buena, respaldo o elogio de terceros.
 - critica: hay crítica, denuncia, queja, sanción, investigación o cuestionamiento DIRIGIDO al cliente, a su administración, a sus funcionarios o a su vocero.
-- afectacion: la nota le atribuye un hecho adverso que daña su imagen u operación: falla, crisis, escándalo, incumplimiento, pérdida.
-- equilibrada: hay un señalamiento contra el cliente Y la nota trae su respuesta, descargo o versión.
+- afectacion: la nota le atribuye un hecho adverso que daña su imagen u operación (falla, crisis, escándalo, incumplimiento, pérdida) y no trae su voz.
+- respuesta: el cliente o su vocero RECONOCE, admite, explica, aclara, informa, advierte o responde sobre un problema, un retraso, una falla, una afectación, una emergencia o una polémica de su competencia, o fija una posición, sin que la nota destaque una gestión concreta. Hablar de algo malo no es gestión.
+- equilibrada: hay un señalamiento de terceros contra el cliente Y la nota trae su respuesta, descargo o versión.
 - referencial: el cliente solo aparece mencionado: dato, antecedente, fuente citada entre varias, lugar, lista o contexto. La nota no lo evalúa ni le atribuye una acción.
-Paso 2, el "tono" sale del rol: gestion y logro = Positivo; critica y afectacion = Negativo; equilibrada y referencial = Neutro.
+Paso 2, el "tono" sale del rol: gestion y logro = Positivo; critica y afectacion = Negativo; respuesta, equilibrada y referencial = Neutro.
 Comprobaciones:
+- Primero el HECHO: ¿qué pasó y es favorable o adverso para el cliente? Si el hecho es adverso (retraso, sobrecosto, falla, afectación, aumento de delitos, emergencia, polémica) y el cliente lo reconoce, lo explica o responde, el rol es respuesta (Neutro), nunca gestion. Solo es gestion cuando el centro de la nota es la solución concreta que el cliente YA ejecutó o entregó, no una explicación, una promesa ni un anuncio de que "se trabaja en ello".
+- El verbo del titular orienta: reconoce, admite, acepta, explica, aclara, responde, defiende, advierte, lamenta, pide, se pronuncia = respuesta. Entrega, inaugura, lanza, invierte, habilita, recupera, logra, amplía = gestion.
+- afectacion o respuesta: el mismo hecho adverso es afectacion si lo cuentan terceros o la nota lo presenta como falla del cliente sin su voz, y respuesta si quien lo cuenta, reconoce o explica es el propio cliente.
 - ¿De quién habla la nota? Un asunto grave (muertes, violencia, crisis, quejas contra otros) no es Negativo si el cliente no es el señalado ni el responsable. Una buena noticia de un tercero no es Positivo si el cliente solo está mencionado.
-- Lo que hace o dice un VOCERO en su cargo cuenta como del cliente. Si el cliente o su vocero denuncia, advierte o critica a OTRO, es su labor (gestion), no una crítica contra él.
-- Una entidad con nombre parecido (otro país, otra ciudad, otra institución) no es el cliente: referencial.
-- Ante duda entre Positivo o Negativo y Neutro, elige referencial (Neutro)."""
+- Lo que hace o dice un VOCERO en su cargo cuenta como del cliente. Si el cliente o su vocero denuncia, advierte, opina o critica a OTRO, es respuesta (Neutro): no es una crítica contra él ni una gestión.
+- Una entidad con nombre parecido (otro país, otra ciudad, otra institución), un homónimo del vocero o el cargo como referencia ("candidato a la alcaldía", "cuando X era alcalde") no es el cliente: referencial.
+- Ante duda entre Positivo o Negativo y Neutro, elige Neutro (respuesta o referencial)."""
 
 RUBRICA_SUBTEMA = """Cómo se redacta un SUBTEMA preciso:
 1. Identifica el HECHO principal de la nota: qué pasó (no el papel del cliente, no un párrafo lateral). Si el cliente solo opina sobre un asunto, el subtema es ese asunto.
@@ -786,17 +825,18 @@ Eres un analista de monitoreo de medios que clasifica noticias en español de Co
 </rol>
 
 <objetivo>
-Recibes el CLIENTE, sus ALIAS y VOCEROS. A cada noticia le asignas ROL, TONO y SUBTEMA (y TEMA cuando el pedido lo indique) y los guardas con guardar_clasificacion. Las noticias ya vienen con su "contexto" (título, resumen y las oraciones literales donde aparece el cliente). No supongas un cliente que el pedido no nombre.
+Recibes el CLIENTE, sus ALIAS y VOCEROS. A cada noticia le asignas ROL, TONO y SUBTEMA (y TEMA cuando el pedido lo indique) y los guardas con guardar_clasificacion. Las noticias ya vienen con su "contexto": el título (cuando nombra al cliente) y los SEGMENTOS literales del cuerpo donde aparece el cliente, en el orden del texto; " […] " separa segmentos que no eran contiguos. No supongas un cliente que el pedido no nombre.
 </objetivo>
 
 <cliente_alias_voceros>
 - Una mención de cualquier ALIAS cuenta como mención del cliente.
 - Una mención de un VOCERO, o lo que él dice o se dice de él en su rol, cuenta como mención del cliente y pesa en el TONO.
-- Si leer_noticias marca "sin_mencion_literal": el texto no nombra al cliente, a sus alias ni a sus voceros. Comprueba si de verdad se habla de él (por su cargo o por "la entidad"); si no, el rol es referencial y el tono Neutro.
+- "menciones_cliente" lista las menciones ya ubicadas en la nota, con su clase: marca o alias, vocero, Alcaldía o Distrito, entidad adscrita. Las secretarías, entidades y directivos que aparezcan ahí hacen parte del cliente: su gestión, sus respuestas y las críticas que reciben cuentan para el TONO.
+- Si leer_noticias marca "sin_mencion_literal": el texto no nombra al cliente, a sus alias, a sus voceros ni a sus entidades (o solo trae el cargo como referencia, un homónimo u otra entidad). Comprueba si de verdad se habla de él; si no, el rol es referencial y el tono Neutro.
 </cliente_alias_voceros>
 
 <como_trabajas>
-Analiza la columna Contexto analizado completa (incluye título, resumen y el extracto de la marca/alias/vocero); el subtema y el tono salen de ese contenido, no de una frase suelta del titular. En leer_noticias ese contenido llega en "contexto"; "titulo_solo_para_agrupar" es solo una etiqueta corta para reconocer notas del mismo hecho: no lo uses para redactar el subtema ni copies fragmentos suyos. MAL "Presunto hacker tenía información inteligencia" (recorte del titular con verbo conjugado) -> BIEN "Captura de hacker con información de inteligencia".
+Analiza la columna Contexto analizado completa (incluye título, resumen y el extracto de la marca/alias/vocero); el subtema y el tono salen de ese contenido, no de una frase suelta del titular. Lee TODOS los segmentos antes de decidir: el SUBTEMA nombra el hecho principal de la noticia ("hecho", cuando viene, es la entrada de la nota; si no viene, la entrada ya está en el contexto) y el TONO sale de lo que los segmentos dicen del cliente frente a ese hecho. En leer_noticias ese contenido llega en "contexto"; "titulo_solo_para_agrupar" es solo una etiqueta corta para reconocer notas del mismo hecho: no lo uses para redactar el subtema ni copies fragmentos suyos. MAL "Presunto hacker tenía información inteligencia" (recorte del titular con verbo conjugado) -> BIEN "Captura de hacker con información de inteligencia".
 
 SUBTEMA: clasificación precisa y específica del hecho que cuenta el "contexto" de la noticia. Reglas obligatorias (guardar_clasificacion RECHAZA el subtema que no las cumpla):
 - Frase NOMINAL de 3 a 7 palabras que define el hecho (quién, qué) y lo distingue de otros.
@@ -828,6 +868,11 @@ Ejemplos (cliente: una alcaldía):
 - "Denuncian sobrecostos; la Alcaldía respondió que el contrato cumple la ley" -> rol equilibrada, Neutro.
 - "Homicidios aumentaron 12 %, según cifras de la Alcaldía" -> rol referencial, Neutro (asunto grave, pero la nota no evalúa a la Alcaldía).
 - "Empresa privada ganó premio; al acto asistió un delegado de la Alcaldía" -> rol referencial, Neutro.
+- "El alcalde reconoce afectaciones al cronograma del metro por obras en una estación y traslado de redes" -> rol respuesta, Neutro (reconoce un problema; que el titular nombre al alcalde no lo hace Positivo).
+- "La Alcaldía explicó las causas de los trancones por las obras y pidió paciencia" -> rol respuesta, Neutro.
+- "Obras del metro completan cuatro meses de atraso, advierte la interventoría" -> rol afectacion, Negativo (hecho adverso atribuido al cliente, sin su voz).
+- "La Alcaldía entregó ayudas a 120 familias afectadas por las lluvias" -> rol gestion, Positivo (atención concreta del problema).
+- "El alcalde anunció que revisará el contrato tras las denuncias de sobrecostos" -> rol equilibrada, Neutro.
 guardar_clasificacion RECHAZA la fila si el rol y el tono no coinciden.
 Si el pedido trae un bloque <criterio_tono>, ese criterio del cliente MANDA en los casos que nombre: usa el tono que indique y el rol que corresponde a ese tono.
 
@@ -839,7 +884,7 @@ Consistencia, en este orden:
 
 <herramientas>
 - mcp__medios__leer_noticias(desde): páginas de noticias; empieza en desde=0, clasifica y guarda esa página, y pide la siguiente con "siguiente" hasta que sea null.
-- mcp__medios__guardar_clasificacion(filas_json): lista JSON [{"id":"…","subtema":"…","rol":"gestion|logro|critica|afectacion|equilibrada|referencial","tono":"Positivo|Neutro|Negativo","tema":"…"}]. Puedes llamarla por tandas; las filas repetidas se corrigen. Dice cuántas filas faltan.
+- mcp__medios__guardar_clasificacion(filas_json): lista JSON [{"id":"…","subtema":"…","rol":"gestion|logro|critica|afectacion|respuesta|equilibrada|referencial","tono":"Positivo|Neutro|Negativo","tema":"…"}]. Puedes llamarla por tandas; las filas repetidas se corrigen. Dice cuántas filas faltan.
 - mcp__medios__candidatos_consistencia(desde): solo al final (paso 3).
 - Agent (ayudante revisor-subtemas): solo en el paso 3.
 No tienes terminal ni puedes leer ni escribir archivos.
@@ -938,16 +983,18 @@ PROMPT_AUDITOR_TONO = (
     "es verificar el TONO de las filas que recibes, mirando SOLO cómo la nota evalúa al CLIENTE "
     "(marca, alias o voceros) que trae el pedido. No cambias subtemas.\n"
     + RUBRICA_TONO + "\n"
-    "Cada fila trae su titulo, su contexto (las oraciones donde aparece el cliente), el tono y rol "
+    "Cada fila trae su titulo, su contexto (los segmentos donde aparece el cliente; ' […] ' separa "
+    "segmentos no contiguos), el tono y rol "
     "actuales y los \"motivos\" por los que se audita. Para cada fila:\n"
     "1. Ubica en el contexto la mención del cliente, alias o vocero y qué se dice de él.\n"
     "2. Decide el rol y, con él, el tono. Un Negativo exige que la crítica o el hecho adverso recaiga "
-    "en el cliente; un Positivo exige que la acción o el resultado favorable sea del cliente.\n"
+    "en el cliente; un Positivo exige una gestión concreta o un resultado favorable del cliente: si "
+    "el cliente solo reconoce, explica o responde por un problema, es respuesta (Neutro).\n"
     "3. Las filas con el mismo \"subtema\" que cuentan el mismo hecho llevan el mismo tono.\n"
     "Si el pedido trae \"criterio_tono\", ese criterio del cliente MANDA en los casos que nombre: "
     "usa el tono que indique y el rol que corresponde a ese tono.\n"
     "Responde SOLO con JSON compacto, sin texto alrededor, con TODAS las filas recibidas: "
-    '{"resultados":[{"id":"...","rol":"gestion|logro|critica|afectacion|equilibrada|referencial",'
+    '{"resultados":[{"id":"...","rol":"gestion|logro|critica|afectacion|respuesta|equilibrada|referencial",'
     '"tono":"Positivo|Neutro|Negativo","razon":"máximo 12 palabras"}]}'
 )
 
@@ -1014,7 +1061,8 @@ def _servidor(sdk, tramo=None, pendientes: bool = False):
     leer = sdk.tool(
         "leer_noticias",
         "Devuelve PÁGINAS de %d noticias con id, 'titulo_solo_para_agrupar' (etiqueta corta) y "
-        "'contexto' (título, resumen y oraciones donde aparece el cliente). 'desde' = 0 la primera "
+        "'contexto' (título y segmentos literales donde aparece el cliente), 'hecho' (entrada de "
+        "la nota, si el contexto no la trae) y 'menciones_cliente'. 'desde' = 0 la primera "
         "vez y luego 'siguiente' hasta null. Las filas con 'igual_a' repiten el título de otra fila "
         "y heredan su clasificación. 'sin_mencion_literal' = el texto no nombra al cliente, sus "
         "alias ni sus voceros." % POR_PAGINA,
@@ -1250,7 +1298,7 @@ def candidatos_tono() -> List[dict]:
         if fid in dudosos:
             motivos.append("el rol y el tono guardados no coincidían")
             peso = 4
-        if r["tono"] != "Neutro" and not menciona_cliente(d["titulo"] + " " + d["contexto"]):
+        if r["tono"] != "Neutro" and not _nombra_cliente(d):
             motivos.append("tono %s sin mención literal del cliente, alias ni voceros" % r["tono"])
             peso = max(peso, 4)
         if len(tonos_sub.get(_simple(r.get("subtema")), ())) > 1:
@@ -1259,6 +1307,11 @@ def candidatos_tono() -> List[dict]:
         if r["tono"] == "Negativo":
             motivos.append("Negativo: confirma que la crítica o el hecho adverso recae en el cliente")
             peso = max(peso, 2)
+        elif r["tono"] == "Positivo" and titulo_adverso(d["titulo"]):
+            motivos.append("Positivo con un hecho adverso o una respuesta en el título: es gestion "
+                           "solo si la nota destaca una solución concreta ya ejecutada; si el "
+                           "cliente reconoce, explica o responde por el problema, es respuesta (Neutro)")
+            peso = max(peso, 3)
         elif r["tono"] == "Positivo" and not menciona_cliente(d["titulo"]):
             motivos.append("Positivo y el cliente no está en el título: confirma que la acción o "
                            "el resultado favorable es suyo y no una mención de paso")

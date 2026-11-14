@@ -485,6 +485,64 @@ def _contexto_exacto_marca(texto: str, titulo: str, brand: str,
         total += len(o) + 1
     texto_out = ' '.join(salida).strip()
     return texto_out[:tope] if len(texto_out) > tope else texto_out
+
+
+# ============================================================================
+# Contexto analizado por SEGMENTOS (2026-11-14, pedido del usuario): se ubican
+# TODAS las menciones del cliente en el CuerpoEs (marca, alias, voceros y, con
+# el perfil del Distrito, la Alcaldía, el alcalde por su cargo y las
+# secretarías y entidades adscritas) y se arma el contexto con esos segmentos
+# en el orden del texto. Antes eran las tres primeras oraciones con una
+# coincidencia literal de marca/alias/vocero. Ver contexto_cliente.py.
+# ============================================================================
+def detector_cliente(brand: str, aliases: Sequence[str] = (), voceros: Sequence[str] = (),
+                     distrito: bool = False):
+    import contexto_cliente as _cc
+    vz = list(voceros or [])
+    return _cc.Detector(
+        brand, list(aliases or []), vz, distrito=distrito,
+        enmascarar=(lambda t: _enmascarar_menciones_ajenas(t, vz)) if distrito else None)
+
+
+def _fuente_contexto(row: dict, km: dict, det) -> str:
+    """CuerpoEs si nombra al cliente; si no, el primer texto de la fila que
+    sí lo nombre; si ninguno, el más largo."""
+    candidatos = [row.get('CuerpoEs'), row.get('Cuerpo'), row.get('Texto'),
+                  row.get('Texto completo'), row.get('Resumen - Aclaracion'),
+                  row.get('resumen corto'), row.get('Resumen'),
+                  row.get(km.get('resumen', 'Resumen - Aclaracion'))]
+    textos = [str(v) for v in candidatos
+              if v is not None and not (isinstance(v, float) and v != v)
+              and str(v).strip() and str(v).strip().lower() != 'nan']
+    if not textos:
+        return ''
+    for t in textos:
+        if det.menciona(t):
+            return t
+    return max(textos, key=len)
+
+
+def contexto_por_segmentos(row: dict, km: dict, det) -> Tuple[str, dict]:
+    """(Contexto analizado, meta) de una fila. El contexto es el Título
+    (cuando nombra al cliente) + los segmentos del cuerpo con menciones, con
+    al menos MIN_CONTEXTO_CARACTERES. Sin mención en el cuerpo se usa la
+    entrada de la noticia (3 oraciones), como antes."""
+    import contexto_cliente as _cc
+    titulo = _titulo_fila(row, km)
+    fuente = _fuente_contexto(row, km, det)
+    meta = _cc.construir(
+        fuente, titulo, det,
+        tipo_medio=str(row.get(km.get('tipodemedio', 'Tipo de Medio'), '') or ''))
+    titulo_limpio = (titulo or '').strip()
+    base = meta['contexto'] or _contexto_minimo_util('', titulo, _cc.limpiar(fuente))
+    prefijo = ''
+    if titulo_limpio and titulo_limpio not in base and meta['titulo_menciona']:
+        prefijo = titulo_limpio + ' '
+    ctx = _extender_a_minimo(prefijo, base, _cc.limpiar(fuente), titulo_limpio)
+    meta['mencion_cliente'] = bool(meta['titulo_menciona'] or meta['oraciones_con_mencion'])
+    return ctx, meta
+
+
 BASE_URL_DEFECTO = "https://api.openai.com/v1"
 # v4.42: gpt-6-luna es el default. gpt-4.1-nano-2025-04-14 se descontinúa
 # en la API de OpenAI el 2026-10-23 (aviso de deprecación).
@@ -492,7 +550,7 @@ MODELO_DEFECTO = "gpt-6-luna"
 # v4.53: sello del analizador. El encabezado de la app lo muestra junto a
 # APP_VERSION; si el despliegue muestra un sello distinto (o "sin-sello"),
 # el contenedor NO corre este archivo aunque el encabezado diga otra versión.
-ANALYZER_BUILD = "v4.74-coherencia-texto"  # v4.62: ancla de riesgo + clases de sinonimia
+ANALYZER_BUILD = "v4.75-contexto-segmentos"  # v4.62: ancla de riesgo + clases de sinonimia
 # v4.53: solo cambia el sello (la lógica del analizador no se toca en esta versión;
 # el cambio es de interfaz).
 JEV_URL_DEFECTO = "https://api.typesafe.ai/v1/systemone"
@@ -8147,6 +8205,14 @@ def _etiquetar_con_haiku(cfg: dict, grupos: List[dict], candidatos_tax: Sequence
     for g in grupos:
         it = {'id': str(g['grupo']), 'titulo': g.get('titulo') or '',
               'contexto': g.get('contexto_marca') or g.get('contexto') or g.get('texto') or ''}
+        # 2026-11-14: la entrada de la noticia (el hecho) y las menciones del
+        # cliente ya ubicadas viajan aparte del contexto.
+        if g.get('hecho'):
+            it['hecho'] = g['hecho']
+        if g.get('menciones_cliente'):
+            it['menciones'] = list(g['menciones_cliente'])
+        if g.get('mencion_cliente') is not None:
+            it['mencion_cliente'] = bool(g['mencion_cliente'])
         if con_tg and rows:
             it.update(_campos_tipo_genero_haiku(rows, g.get('idxs') or [], km or {}))
         items.append(it)
@@ -8889,9 +8955,15 @@ def _para_revisar_y_memoria(rows, grupos, km, cfg, brand, aliases, info_haiku, i
             revisar.append(item(gid, 'Sin clasificar por el agente',
                                 'Quedó con el respaldo determinista.'))
         i = primera.get(gid)
-        if i is not None and not _mh.menciona_cliente(
+        # 2026-11-14: manda lo que ubicó el Contexto por segmentos (cargo del
+        # alcalde y entidades adscritas incluidos; menciones ajenas excluidas).
+        if g.get('mencion_cliente') is not None:
+            _sin_mencion = not g['mencion_cliente']
+        else:
+            _sin_mencion = i is not None and not _mh.menciona_cliente(
                 '%s %s' % (_titulo_fila(rows[i], km), rows[i].get('Contexto analizado') or ''),
-                terminos):
+                terminos)
+        if i is not None and _sin_mencion:
             revisar.append(item(gid, 'Sin mención literal de la marca',
                                 'El texto no nombra la marca, sus alias ni sus voceros.'))
     for sv in ((_ULTIMO_RESUMEN.get('subtemas_forma_final') or {}).get('sobrevivientes') or []):
@@ -9080,25 +9152,26 @@ def enrich_rows_with_ai(
 
     progreso(71, 'Extrayendo contexto de la marca y sus variantes…')
     CONTEXTO_CUERPO_CORTO['filas'] = 0
-    for row in rows:
+    # 2026-11-14: Contexto analizado por segmentos del CuerpoEs. Con el
+    # perfil del Distrito (tono_distrito_positivo) también cuentan la
+    # Alcaldía, el alcalde por su cargo y las secretarías y entidades adscritas.
+    det_cliente = detector_cliente(brand, aliases, cfg.get('voceros') or [],
+                                   distrito=bool(cfg.get('tono_distrito_positivo')))
+    ctx_meta: Dict[int, dict] = {}
+    for _i_fila, row in enumerate(rows):
         if row.get('is_duplicate'):
             row['Contexto analizado'] = '-'
         else:
-            # v4.74: la fuente del extracto es el CuerpoEs cuando trae la
-            # marca, un alias o un vocero.
-            fuente_ctx = _texto_contexto_fila(row, km, brand, aliases,
-                                              cfg.get('voceros') or [])
-            ctx = _contexto_exacto_marca(
-                fuente_ctx, _titulo_fila(row, km), brand, aliases,
-                voceros=cfg.get('voceros') or [],
-                tipo_medio=str(row.get(km.get('tipodemedio', 'Tipo de Medio'), '')
-                               or ''))
-            # v4.66: Contexto = título (si menciona marca/alias/vocero)
-            # + extracto recortado a 3 oraciones, extendido a 4 cuando el
-            # texto derivado es corto (<=60 palabras o <=370 caracteres).
-            row['Contexto analizado'] = _contexto_con_titulo_y_extension(
-                ctx, _titulo_fila(row, km), fuente_ctx,
-                brand, aliases, cfg.get('voceros') or [])
+            row['Contexto analizado'], ctx_meta[_i_fila] = contexto_por_segmentos(
+                row, km, det_cliente)
+    _ULTIMO_RESUMEN['contexto_segmentos'] = {
+        'filas': len(ctx_meta),
+        'con_mencion_en_cuerpo': sum(1 for m in ctx_meta.values() if m['oraciones_con_mencion']),
+        'solo_titulo': sum(1 for m in ctx_meta.values()
+                           if m['titulo_menciona'] and not m['oraciones_con_mencion']),
+        'sin_mencion': sum(1 for m in ctx_meta.values() if not m['mencion_cliente']),
+        'por_categoria': dict(Counter(c for m in ctx_meta.values() for c in m['categorias'])),
+    }
     _ULTIMO_RESUMEN['contexto_cuerpo_menor_403'] = CONTEXTO_CUERPO_CORTO['filas']
 
     _etapa('Contexto de la marca')
@@ -9111,6 +9184,10 @@ def enrich_rows_with_ai(
     for g in grupos:
         contexto = [str(rows[i].get('Contexto analizado') or '') for i in g.get('idxs', [])]
         g['contexto_marca'] = '\n\n'.join(dict.fromkeys(x for x in contexto if x and x != '-'))[:12000]
+        _metas = [ctx_meta[i] for i in g.get('idxs', []) if i in ctx_meta]
+        g['menciones_cliente'] = list(dict.fromkeys(x for m in _metas for x in m['menciones']))[:8]
+        g['mencion_cliente'] = any(m['mencion_cliente'] for m in _metas) if _metas else None
+        g['hecho'] = next((m['lead'] for m in _metas if m.get('lead')), '')
     progreso(75, '%d grupos (notas equivalentes comparten etiqueta)' % len(grupos))
     _etapa('Agrupación de notas equivalentes')
 
@@ -9331,6 +9408,14 @@ def enrich_rows_with_ai(
         incidental = aplicar_regla_positivo_incidental(
             grupos_tono, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [],
             solo_gestion=solo_gestion)
+        # 2026-11-14: titular adverso sin gestión (el cliente reconoce,
+        # explica o responde por un problema) = Neutro, nunca Positivo.
+        respuestas = aplicar_regla_respuesta_a_problema(
+            grupos_tono, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [],
+            det=det_cliente)
+        if respuestas:
+            _ULTIMO_RESUMEN['tono_respuesta_a_problema'] = respuestas
+            incidental = list(incidental) + list(respuestas)
         # v1.33: condolencias, homenajes y saludos de la marca no son gestión.
         if solo_gestion:
             protocolo = aplicar_regla_protocolaria(
@@ -10311,6 +10396,8 @@ def aplicar_regla_secretarias_distritales(grupos, etiquetas, brand, aliases, voc
         texto = '%s. %s' % (titulo, g.get('contexto') or g.get('texto') or '')
         if _MEDIDA_RESTRICTIVA_PAT.search(titulo) or _NOTICIA_PROTOCOLO_PAT.search(texto):
             continue
+        if titulo_adverso_sin_gestion(titulo):
+            continue
         if e.get('tipo') == 'Opinión de terceros':
             continue
         if _marca_blanco_de_critica(texto, brand, blancos):
@@ -10322,6 +10409,86 @@ def aplicar_regla_secretarias_distritales(grupos, etiquetas, brand, aliases, voc
                 or _titular_distrito_gestiona(titulo)):
             e['tono'] = 'Positivo'
             corregidos.append(g.get('grupo'))
+    return corregidos
+
+
+# ============================================================================
+# 2026-11-14 (regla del usuario): que la nota nombre al alcalde, a la Alcaldía
+# o a una secretaría no la hace Positiva. «Galán reconoce afectaciones al
+# cronograma del metro por obras en la estación 16 y traslado de redes» es
+# Neutro: el cliente responde por algo adverso, no se destaca una gestión.
+# - Titular adverso (retraso, afectación, falla, crisis, críticas…) sin verbo
+#   de gestión o de solución: nunca Positivo.
+# - Si además el cliente es quien reconoce, explica o responde y no hay un
+#   señalamiento dirigido de terceros, tampoco Negativo: Neutro.
+# ============================================================================
+_ADVERSO_PAT = re.compile(
+    r'\b(?:afectaci|retras|demor|atras[oa]|falla|crisis|emergencia|sobrecost|incumpl|polemic|'
+    r'escandal|critic(?:a|an|aron|ad)|(?<!estado )(?<!punto )(?<!nivel )critico\b|cuestion|'
+    r'denunci|quej|reclam|protest|caos|colaps|trancon|riesgo|deficit|'
+    r'irregular|corrup|insegur|problema|dificultad|perdida|dano|hueco|inundaci|'
+    r'aument\w* (?:de|del|en) (?:los |las |el |la )?(?:hurt|homicid|robo|delit|atrac|extorsi))\w*')
+_ADMITE_PAT = re.compile(r'\b(?:reconoc(?:e|en|io|ieron)|admit(?:e|en|io|ieron)|'
+                         r'acept(?:a|o|an|aron) (?:que|su|sus|el|la|los|las))\b')
+_RESPONDE_PAT = re.compile(
+    r'\b(?:explic|aclar|respond|defiend|defend|justific|lament|adviert|advirt|alert[ao]|'
+    r'se pronunci|pid(?:e|io|en|ieron)|pide excusas|disculp|rechaz|desmient|desminti|neg[oó]|'
+    r'niega|confirm)\w*')
+_ACCION_TITULO_PAT = re.compile(
+    r'\b(?:super|reduc|reduj|baj[ao]|bajaron|disminu|solucion|resuelv|resolv|control|mitig|'
+    r'previen|evit|recuper|restablec|normaliz|logr|gan[ao]|avanz|mejor|fortalec|refuerz|reforz|'
+    r'atiend|atend|inaugur|lanz|habilit|invier|invirt|ampli|abre|abrio|construy|complet|culmin|'
+    r'termin|instal|implement|ofrec|benefici|captur|desarticul|incaut|apoy|acompan|anunci|'
+    r'present|firm|destin|activ|despleg|interv|entreg(?:o|an|aron|ara|aran))\w*'
+    r'|(?<!la )(?<!de )(?<!una )(?<!su )\bentrega\b')
+
+
+def titulo_adverso_sin_gestion(titulo: str) -> bool:
+    """El titular cuenta un hecho adverso y no trae un verbo de gestión o de
+    solución. Una admisión («reconoce», «admite») manda sobre cualquier verbo."""
+    n = nz(titulo or '')
+    if not n or not _ADVERSO_PAT.search(n):
+        return False
+    if _ADMITE_PAT.search(n) or re.search(
+            r'\b(?:dias|semanas|meses|anos) de (?:atraso|retraso|demora)\b', n):
+        return True
+    return not _ACCION_TITULO_PAT.search(n)
+
+
+def cliente_responde_en_titulo(titulo: str) -> bool:
+    n = nz(titulo or '')
+    return bool(_ADMITE_PAT.search(n) or _RESPONDE_PAT.search(n))
+
+
+def aplicar_regla_respuesta_a_problema(grupos, etiquetas, brand, aliases, voceros=(), det=None):
+    """Positivo -> Neutro cuando el titular es adverso y no destaca una
+    gestión; Negativo -> Neutro cuando, además, el cliente está en el titular
+    reconociendo, explicando o respondiendo y nadie lo señala. El Neutro
+    queda pegajoso (ninguna regla posterior lo sube). Devuelve los grupos."""
+    blancos = _con_voceros(aliases, voceros)
+    actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
+               if x and len(nz(x)) >= 4]
+    corregidos = []
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or e.get('tono') not in ('Positivo', 'Negativo'):
+            continue
+        titulos = [str(g.get('titulo') or '')] + [str(t) for t in (g.get('titulos_alt') or [])]
+        adversos = [t for t in titulos if t.strip() and titulo_adverso_sin_gestion(t)]
+        if not adversos or len(adversos) * 2 < len([t for t in titulos if t.strip()]):
+            continue
+        if e['tono'] == 'Negativo':
+            texto = '%s. %s' % (titulos[0], g.get('contexto_marca') or g.get('contexto')
+                                or g.get('texto') or '')
+            en_titulo = any(
+                cliente_responde_en_titulo(t)
+                and ((det is not None and det.menciona(t)) or any(a in nz(t) for a in actores))
+                for t in adversos)
+            if not en_titulo or _marca_blanco_de_critica(texto, brand, blancos):
+                continue
+        e['tono'] = 'Neutro'
+        e.setdefault('flags', {})['neutro_pegajoso'] = True
+        corregidos.append(g.get('grupo'))
     return corregidos
 
 
@@ -10540,6 +10707,9 @@ def aplicar_guarda_positiva(grupos: Sequence[dict], etiquetas: Dict[int, dict],
         if not e or e.get('tono') != 'Neutro':
             continue
         texto = '%s. %s' % (g.get('titulo', ''), g.get('contexto') or g.get('texto', ''))
+        # 2026-11-14: un titular adverso sin gestión no sube a Positivo.
+        if titulo_adverso_sin_gestion(g.get('titulo', '')):
+            continue
         # Crítica con respuesta de la marca: queda Neutro (la información se
         # equilibra). Esta guarda no la sube a Positivo aunque el vocero hable.
         if _critica_dirigida(texto, brand, _con_voceros(aliases, voceros)) and _respuesta_marca(texto, actores):
@@ -10775,7 +10945,7 @@ _CRITICA_DECRETO_STEMS = (
 # (demasiado corto); las frases de puesta en marcha/servicio van aparte.
 _DISTRITO_VERBO_STEMS = (
     'entreg', 'inaugur', 'constru', 'lanz', 'impuls', 'aprob', 'destin',
-    'invert', 'don', 'respald', 'apoy', 'capacit', 'organiz', 'convoc',
+    'invert', 'dona', 'dono', 'respald', 'apoy', 'capacit', 'organiz', 'convoc',
     'celebr', 'realiz', 'present', 'anunci', 'public', 'socializ',
     'recib', 'ocup', 'firm', 'atend', 'habilit',
     'acompan', 'facilit',
@@ -10855,6 +11025,11 @@ def aplicar_regla_distrito(grupos, etiquetas, brand, aliases, voceros=()):
         completo = '%s. %s' % (titulo, texto)
         nt = nz(completo)
         if not _hecho_bueno_distrito(nt):
+            continue
+        # 2026-11-14: «obra», «proyecto» o «programa» en una nota cuyo
+        # titular es adverso no es un hecho bueno (caso «Galán reconoce
+        # afectaciones al cronograma del metro por obras…»).
+        if e.get('tono') != 'Positivo' and titulo_adverso_sin_gestion(titulo):
             continue
         if _critica_dirigida(completo, brand, _con_voceros(aliases, voceros)):
             if e.get('tono') != 'Neutro':

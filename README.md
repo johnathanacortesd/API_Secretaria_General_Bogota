@@ -5,6 +5,37 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### Contexto analizado por segmentos y tono «respuesta» (2026-11-14)
+
+- **Contexto analizado** (`contexto_cliente.py`): ya no son las tres primeras
+  oraciones con la marca. Se ubican TODAS las menciones del cliente en el
+  CuerpoEs y se arma el contexto con esos segmentos, en el orden del texto:
+  el Título (si nombra al cliente) + cada oración con mención, la anterior
+  cuando depende de ella («Frente a esto, el alcalde…») y la siguiente cuando
+  sigue la cita o el sujeto («El mandatario agregó…»). Entre segmentos no
+  contiguos va « […] ». Tope 1.200 caracteres (900 en radio y TV), mínimo 403.
+- **Qué cuenta como mención** (perfil con `tono_distrito_positivo`): la
+  Secretaría General, la Alcaldía, el Distrito y la administración distrital;
+  el alcalde por nombre o por cargo («el mandatario distrital», «alcalde
+  mayor»); los voceros; y las secretarías y entidades adscritas (Movilidad,
+  Gobierno, Seguridad, IDU, TransMilenio, Empresa Metro, UAESP, IDRD,
+  alcaldías locales…). **No cuentan**: candidatos a la Alcaldía, exalcaldes,
+  otros alcaldes, secretarías de otra ciudad ni homónimos (Juan Manuel Galán,
+  avenida Luis Carlos Galán).
+- **El modelo recibe** el contexto, `hecho` (la entrada de la nota, para el
+  subtema) y `menciones_cliente` (qué se ubicó y de qué clase).
+- **Tono: que nombren al alcalde no hace Positiva la nota.** Rol nuevo
+  `respuesta` = Neutro: el cliente reconoce, explica o responde por algo
+  adverso. «Galán reconoce afectaciones al cronograma del metro por obras en
+  la estación 16 y traslado de redes» = Neutro. `gestion` exige una acción
+  concreta ya ejecutada.
+- **Reglas en código**: un titular adverso sin verbo de gestión nunca queda
+  Positivo (`aplicar_regla_respuesta_a_problema`) y ninguna regla lo sube.
+  Antes la regla del distrito lo subía porque el texto decía «obras» (y
+  «donde» contaba como «donar»). El auditor de tono revisa los Positivos con
+  titular adverso.
+- Pruebas: `tests/test_contexto_segmentos_y_respuesta.py`.
+
 ### Nunca agrupar porque sí (caso «Jardín Olarte», 2026-11-09)
 
 Dossier real de la Secretaría General revisado a mano (51 filas). Con las
