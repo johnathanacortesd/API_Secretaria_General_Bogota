@@ -763,7 +763,7 @@ async def _candidatos_consistencia(args: Dict[str, Any]) -> Dict[str, Any]:
 
 RUBRICA_TONO = """El TONO mide cómo la noticia EVALÚA o deja al CLIENTE (la marca, sus alias o sus voceros). No es el ánimo general de la noticia ni la gravedad del asunto. Se decide en dos pasos.
 Paso 1, el "rol": qué papel tiene el cliente en la nota.
-- gestion: el cliente o su vocero HACE algo que la nota presenta a su favor: gestión, obra, programa, inversión, alianza, estudio, informe, pronunciamiento, o actúa frente a un problema.
+- gestion: el cliente o su vocero HACE algo que la nota presenta a su favor: gestión, obra, programa, inversión, alianza, estudio, informe o pronunciamiento propio que la nota presenta como avance o resultado. Reconocer, admitir, explicar, justificar, defender o responder ante un problema, retraso, crítica o queja NO es gestion: es equilibrada.
 - logro: la nota le atribuye un resultado o impacto favorable: reconocimiento, premio, cifra buena, respaldo o elogio de terceros.
 - critica: hay crítica, denuncia, queja, sanción, investigación o cuestionamiento DIRIGIDO al cliente, a su administración, a sus funcionarios o a su vocero.
 - afectacion: la nota le atribuye un hecho adverso que daña su imagen u operación: falla, crisis, escándalo, incumplimiento, pérdida.
@@ -773,6 +773,7 @@ Paso 2, el "tono" sale del rol: gestion y logro = Positivo; critica y afectacion
 Comprobaciones:
 - ¿De quién habla la nota? Un asunto grave (muertes, violencia, crisis, quejas contra otros) no es Negativo si el cliente no es el señalado ni el responsable. Una buena noticia de un tercero no es Positivo si el cliente solo está mencionado.
 - Lo que hace o dice un VOCERO en su cargo cuenta como del cliente. Si el cliente o su vocero denuncia, advierte o critica a OTRO, es su labor (gestion), no una crítica contra él.
+- Que el vocero aparezca en el titular NO vuelve Positiva la nota. Si el vocero RESPONDE o RECONOCE ante un problema (retrasos, afectaciones, quejas, críticas, fallas), el rol es equilibrada y el tono Neutro, salvo que la nota destaque un resultado favorable concreto (obra entregada, avance logrado, cifra buena).
 - Una entidad con nombre parecido (otro país, otra ciudad, otra institución) no es el cliente: referencial.
 - Ante duda entre Positivo o Negativo y Neutro, elige referencial (Neutro)."""
 
@@ -826,6 +827,8 @@ Ejemplos (cliente: una alcaldía):
 - "La Alcaldía entregó 300 viviendas" -> rol gestion, Positivo.
 - "Concejales denuncian sobrecostos en contrato de la Alcaldía" -> rol critica, Negativo.
 - "Denuncian sobrecostos; la Alcaldía respondió que el contrato cumple la ley" -> rol equilibrada, Neutro.
+- "Galán reconoce afectaciones al cronograma del metro por obras y traslado de redes" -> rol equilibrada, Neutro (el alcalde reacciona a un problema; mencionarlo no la hace Positiva).
+- "Alcalde responde a críticas por aumento de hurtos" -> rol equilibrada, Neutro.
 - "Homicidios aumentaron 12 %, según cifras de la Alcaldía" -> rol referencial, Neutro (asunto grave, pero la nota no evalúa a la Alcaldía).
 - "Empresa privada ganó premio; al acto asistió un delegado de la Alcaldía" -> rol referencial, Neutro.
 guardar_clasificacion RECHAZA la fila si el rol y el tono no coinciden.
@@ -1259,6 +1262,15 @@ def candidatos_tono() -> List[dict]:
         if r["tono"] == "Negativo":
             motivos.append("Negativo: confirma que la crítica o el hecho adverso recae en el cliente")
             peso = max(peso, 2)
+        elif r["tono"] == "Positivo" and re.search(
+                r"\b(reconoc|admit|acept|respond|replic|explic|justific|defiend|defend|aclar|"
+                r"descart|lament|rechaz)\w*", _simple(d["titulo"])) and re.search(
+                r"\b(afectaci|retras|demora|aplaz|incumpl|cronograma|critic|cuestion|queja|"
+                r"denunci|sobrecosto|falla|problema|crisis|polemic|hurto|error|irregularidad|"
+                r"reclam|preocupaci|riesgo|sanci|investigaci|protesta)\w*", _simple(d["titulo"])):
+            motivos.append("Positivo pero el cliente o su vocero REACCIONA a un problema "
+                           "(reconoce, responde, explica): sin un logro concreto es Neutro")
+            peso = max(peso, 4)
         elif r["tono"] == "Positivo" and not menciona_cliente(d["titulo"]):
             motivos.append("Positivo y el cliente no está en el título: confirma que la acción o "
                            "el resultado favorable es suyo y no una mención de paso")

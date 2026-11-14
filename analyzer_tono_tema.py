@@ -418,6 +418,49 @@ TOPE_CTX_GENERAL = 2000
 TOPE_CTX_RADIODIFUSION = 1200
 
 
+# 2026-11-14: «lo que dijo» el vocero suele ocupar la oración siguiente a la
+# que lo nombra («El alcalde dijo: "…"», «Galán explicó. Agregó que…»). Se
+# incluyen hasta 2 oraciones de continuación del habla cuando la mención
+# abre una cita (termina en «:» o deja comillas sin cerrar) o la siguiente
+# empieza con un verbo de habla o con una comilla/raya de diálogo.
+_CONTINUA_HABLA_PAT = re.compile(
+    r'^\W{0,3}(?:agreg|a[ñn]adi|sostuv|insist|reiter|record|precis|aclar|asegur|afirm|indic|'
+    r'se[ñn]al|explic|advirti|enfatiz|resalt|destac|puntualiz|complement|dijo|adem[aá]s,? (?:dijo|'
+    r'agreg|indic|se[ñn]al|afirm))', re.I)
+
+
+def _abre_cita(o: str) -> bool:
+    o = o.rstrip()
+    if o.endswith(':'):
+        return True
+    return (o.count('"') % 2 == 1 or o.count('\u201c') > o.count('\u201d')
+            or o.count('\u00ab') > o.count('\u00bb'))
+
+
+def _oraciones_con_continuacion(oraciones, menciona, max_cont: int = 2):
+    """Oraciones con mención + la continuación de su habla (ver arriba),
+    en orden de aparición y sin repetir."""
+    elegidas, usadas = [], set()
+    for i, o in enumerate(oraciones):
+        if not menciona(o):
+            continue
+        if i not in usadas:
+            usadas.add(i)
+            elegidas.append((i, o))
+        previa, j = o, i + 1
+        while j < len(oraciones) and j - i <= max_cont:
+            sig = oraciones[j]
+            if menciona(sig) or not (_abre_cita(previa) or _CONTINUA_HABLA_PAT.match(sig.strip())
+                                     or re.match(r'^\W{0,2}[\u201c\u00ab"\u2014-]', sig.strip())):
+                break
+            if j not in usadas:
+                usadas.add(j)
+                elegidas.append((j, sig))
+            previa, j = sig, j + 1
+    elegidas.sort(key=lambda t: t[0])
+    return [o for _, o in elegidas]
+
+
 def _contexto_exacto_marca(texto: str, titulo: str, brand: str,
                            aliases: Sequence[str], voceros: Sequence[str] = (),
                            tipo_medio: str = '') -> str:
@@ -453,7 +496,7 @@ def _contexto_exacto_marca(texto: str, titulo: str, brand: str,
     # riesgo de v4.64 (extracto tiny → texto del tamaño del artículo)
     # ya no existe porque _contexto_minimo_util conserva el extracto
     # corto y lo recorta a 3 oraciones en vez de expandirlo.
-    hits = [o for o in oraciones if menciona(o)]
+    hits = _oraciones_con_continuacion(oraciones, menciona)
     if not hits:
         # La marca solo aparece en el titular o no aparece: no se inventa
         # contexto de cuerpo. Se devuelve '' y `_contexto_minimo_util`
@@ -9343,6 +9386,11 @@ def enrich_rows_with_ai(
             if opiniones:
                 _ULTIMO_RESUMEN['tono_opinion_terceros_a_neutro'] = opiniones
                 incidental = list(incidental) + list(opiniones)
+            reactivas = aplicar_regla_respuesta_a_problema(
+                grupos_tono, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
+            if reactivas:
+                _ULTIMO_RESUMEN['tono_respuesta_a_problema_a_neutro'] = reactivas
+                incidental = list(incidental) + list(reactivas)
             restrictivas = aplicar_regla_medida_restrictiva(grupos_tono, etiquetas)
             if restrictivas:
                 _ULTIMO_RESUMEN['tono_medida_restrictiva_a_neutro'] = restrictivas
@@ -10291,6 +10339,61 @@ def _titular_distrito_gestiona(titulo: str) -> bool:
             sujeto + verbos + '|' + sujeto +
             r'(?:refuerza|fortalece|promueve|invita|celebra|reconoce|mejora|amplia|extiende)\b'))
     return bool(_TITULAR_DISTRITO_CACHE[0].search(nz(titulo or '')))
+
+
+# Regla del usuario (2026-11-14): responder, reconocer, explicar o defenderse
+# ante un problema NO es gestión. «Galán reconoce afectaciones al cronograma
+# del metro por obras en la estación 16 y traslado de redes» es Neutro: el
+# alcalde reacciona a algo malo; que lo mencionen no vuelve buena la nota.
+# Patrones sin tildes: se aplican sobre texto normalizado con nz().
+_REACTIVO_PAT = re.compile(
+    r'\b(reconoc\w*|admit\w*|acept\w*|respond\w*|replic\w*|explic\w*|justific\w*|'
+    r'defiend\w*|defend\w*|aclar\w*|descart\w*|desmint\w*|se\s+pronunci\w*|lament\w*|'
+    r'rechaz\w*|sali\w*\s+al\s+paso|da\s+la\s+cara|pide\s+disculpas|ofrece\s+disculpas)\b')
+_PROBLEMA_PAT = re.compile(
+    r'\b(afectaci\w*|retras\w*|demora\w*|aplaz\w*|incumpl\w*|cronograma|critic\w*|'
+    r'cuestion\w*|queja\w*|denunci\w*|sobrecosto\w*|falla\w*|problema\w*|crisis|polemica\w*|'
+    r'inseguridad|hurtos?|atasco\w*|trancon\w*|colapso|error\w*|irregularidad\w*|molestia\w*|'
+    r'reclam\w*|preocupaci\w*|riesgos?|sanci\w*|investigaci\w*|protesta\w*|paro|'
+    r'suspensi\w*|deficit|hallazgo\w*|escandalo|emergencia|inconformidad\w*|sobrecostos?)\b')
+_LOGRO_TITULO_PAT = re.compile(
+    r'\b(inaugur\w*|entreg\w*|logr\w*|lanz\w*|reduj\w*|reduce\w*|celebr\w*|premi\w*|'
+    r'gano|gana|record|beneficia\w*|invierte|invirti\w*|supera\w*)\b')
+
+
+def aplicar_regla_respuesta_a_problema(grupos, etiquetas, brand, aliases, voceros=()):
+    """Positivo -> Neutro (pegajoso) cuando la marca o su vocero REACCIONA a un
+    problema (reconoce, admite, responde, explica, defiende, aclara…) y el
+    titular no trae un logro. Caso: «Galán reconoce afectaciones al
+    cronograma del metro…». Solo mira titular y las oraciones de la marca.
+    Devuelve los grupos corregidos."""
+    actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
+               if x and len(nz(x)) >= 4]
+    if any('alcalde' in a for a in actores):
+        actores.append('alcalde')  # «Alcalde responde…» sin artículo ni nombre
+    corregidos = []
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or e.get('tono') != 'Positivo':
+            continue
+        titulo = nz(g.get('titulo') or '')
+        if not _PROBLEMA_PAT.search(titulo) or _LOGRO_TITULO_PAT.search(titulo):
+            continue
+        reactivo = bool(_REACTIVO_PAT.search(titulo) and any(a in titulo for a in actores))
+        if not reactivo:
+            texto = '%s. %s' % (g.get('titulo') or '', g.get('contexto') or g.get('texto') or '')
+            for o in re.split(r'(?<=[.!?;:])\s+|\n+', ctrl(texto)):
+                no = nz(o)
+                if (any(a in no for a in actores) and _REACTIVO_PAT.search(no)
+                        and _PROBLEMA_PAT.search(no)):
+                    reactivo = True
+                    break
+        if not reactivo:
+            continue
+        e['tono'] = 'Neutro'
+        e.setdefault('flags', {})['neutro_pegajoso'] = True
+        corregidos.append(g.get('grupo'))
+    return corregidos
 
 
 def aplicar_regla_secretarias_distritales(grupos, etiquetas, brand, aliases, voceros=()):
