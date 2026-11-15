@@ -66,6 +66,9 @@ def _defaults() -> dict:
         # 2026-11-09: nombres (p. ej. "Petro") cuyas notas son Neutro para
         # este cliente cuando el titular no nombra a un vocero propio.
         "tono_neutro_titulo": [],
+        # v1.37: subtemas políticos fijos {"aspirantes": rótulo, "petro": rótulo}
+        # (Neutro e Información general). Vacío = sin la regla.
+        "subtemas_politicos": {},
         "tipo_por_actor": False,
         "formato_boletin": False,
         "hora_boletin_corte_manana": 13,
@@ -152,6 +155,9 @@ def normalizar_perfil(data: dict) -> dict:
     d["tono_solo_gestion"] = bool(d["tono_solo_gestion"])
     d["tono_neutro_titulo"] = [str(x).strip() for x in (d.get("tono_neutro_titulo") or [])
                                if str(x).strip()] if isinstance(d.get("tono_neutro_titulo"), list) else []
+    _sp = d.get("subtemas_politicos") if isinstance(d.get("subtemas_politicos"), dict) else {}
+    d["subtemas_politicos"] = {k: str(_sp.get(k) or "").strip()
+                               for k in ("aspirantes", "petro") if str(_sp.get(k) or "").strip()}
     d["tipo_por_actor"] = bool(d["tipo_por_actor"])
     d["formato_boletin"] = bool(d["formato_boletin"])
     # v1.18/v1.14: compatibilidad con perfiles guardados con el modelo

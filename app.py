@@ -19,7 +19,7 @@ from pipeline import (process_dossier, leer_columnas_xlsx, sugerir_columna,
                       cargar_ids_analizados_desde_sheets)
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.36"
+APP_VERSION = "v1.37"
 
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
@@ -671,6 +671,7 @@ def main():
                             st.session_state["_perfil_agrupacion_estricta"] = bool(_perfil_actual.get("agrupacion_estricta"))
                             st.session_state["_perfil_tono_solo_gestion"] = bool(_perfil_actual.get("tono_solo_gestion"))
                             st.session_state["_perfil_tono_neutro_titulo"] = list(_perfil_actual.get("tono_neutro_titulo") or [])
+                            st.session_state["_perfil_subtemas_politicos"] = dict(_perfil_actual.get("subtemas_politicos") or {})
                             st.session_state["_perfil_tipo_por_actor"] = bool(_perfil_actual.get("tipo_por_actor"))
                             st.session_state["_perfil_formato_boletin"] = bool(_perfil_actual.get("formato_boletin"))
                             _cm_p = _perfil_actual.get("hora_boletin_corte_manana")
@@ -692,6 +693,7 @@ def main():
                     st.session_state["_perfil_agrupacion_estricta"] = False
                     st.session_state["_perfil_tono_solo_gestion"] = False
                     st.session_state["_perfil_tono_neutro_titulo"] = []
+                    st.session_state["_perfil_subtemas_politicos"] = {}
                     st.session_state["_perfil_tipo_por_actor"] = False
                     st.session_state["_perfil_formato_boletin"] = False
                     st.session_state["_perfil_hora_boletin_corte_manana"] = 13
@@ -861,8 +863,10 @@ def main():
                             "Reutilizar clasificaciones previas de este cliente", value=True,
                             help="Solo Claude Haiku. Una noticia ya clasificada para este cliente con la "
                                  "misma configuración hereda su tono y subtema sin volver al modelo: más "
-                                 "rápido, sin costo y con el mismo resultado. Desmárcalo para clasificar "
-                                 "todo de nuevo.")
+                                 "rápido, sin costo y con el mismo resultado. Además (cualquier motor), "
+                                 "una noticia igual o muy parecida a una vista en los últimos 3 días "
+                                 "conserva el subtema que tuvo en el boletín anterior. Desmárcalo para "
+                                 "clasificar todo de nuevo.")
                         st.markdown("**💾 Perfil de cliente**")
                         guardar_chk = st.checkbox(
                             "Guardar esta configuración como perfil al procesar",
@@ -958,6 +962,7 @@ def main():
                                         "agrupacion_estricta": bool(st.session_state.get("_perfil_agrupacion_estricta")),
                                         "tono_solo_gestion": bool(st.session_state.get("_perfil_tono_solo_gestion")),
                                         "tono_neutro_titulo": list(st.session_state.get("_perfil_tono_neutro_titulo") or []),
+                                        "subtemas_politicos": dict(st.session_state.get("_perfil_subtemas_politicos") or {}),
                                         "tipo_por_actor": bool(st.session_state.get("_perfil_tipo_por_actor")),
                                         "formato_boletin": bool(st.session_state.get("_perfil_formato_boletin")),
                                         "hora_boletin_corte_manana": st.session_state.get("_perfil_hora_boletin_corte_manana", 13),
@@ -1000,6 +1005,7 @@ def main():
                                     "agrupacion_estricta": bool(st.session_state.get("_perfil_agrupacion_estricta")),
                                     "tono_solo_gestion": bool(st.session_state.get("_perfil_tono_solo_gestion")),
                                     "tono_neutro_titulo": list(st.session_state.get("_perfil_tono_neutro_titulo") or []),
+                                    "subtemas_politicos": dict(st.session_state.get("_perfil_subtemas_politicos") or {}),
                                     "tipo_por_actor": bool(st.session_state.get("_perfil_tipo_por_actor")),
                                     "formato_boletin": bool(st.session_state.get("_perfil_formato_boletin")),
                                     "hora_boletin_corte_manana": st.session_state.get("_perfil_hora_boletin_corte_manana", 13),
@@ -1254,6 +1260,8 @@ def main():
                         if st.session_state.get("pending_ai_config"):
                             st.session_state["pending_ai_config"]["tono_neutro_titulo"] = list(
                                 st.session_state.get("_perfil_tono_neutro_titulo") or [])
+                            st.session_state["pending_ai_config"]["subtemas_politicos"] = dict(
+                                st.session_state.get("_perfil_subtemas_politicos") or {})
                         st.session_state["procesando"] = True
                         st.session_state["processing_complete"] = False
                         st.rerun()
@@ -1310,6 +1318,13 @@ def main():
                     piezas.append("Cubos nuevos específicos: " + ", ".join(cubos_nuevos[:4]))
                 if fallback:
                     piezas.append(f"⚠️ {fallback} etiquetas con respaldo determinista")
+                _prev = analisis.get("subtemas_de_corridas_previas") or 0
+                if _prev:
+                    piezas.append(f"{_prev} noticias conservaron el subtema de una corrida anterior")
+                _spol = analisis.get("subtemas_politicos") or {}
+                if _spol:
+                    piezas.append(f"Subtemas políticos fijos: {_spol.get('aspirantes', 0)} aspirantes "
+                                  f"a la Alcaldía · {_spol.get('petro', 0)} Entorno Gustavo Petro")
                 _mem = analisis.get("memoria") or {}
                 if _mem.get("reutilizadas"):
                     piezas.append(f"{_mem['reutilizadas']} noticias reutilizadas de corridas anteriores "

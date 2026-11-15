@@ -9092,6 +9092,9 @@ def enrich_rows_with_ai(
         'memoria': bool(extra.get('memoria', True)),
         'tono_solo_gestion': bool(extra.get('tono_solo_gestion')),
         'tono_neutro_titulo': [str(x) for x in (extra.get('tono_neutro_titulo') or []) if str(x).strip()],
+        # v1.37: subtemas políticos fijos y memoria de subtemas del boletín.
+        'subtemas_politicos': dict(extra.get('subtemas_politicos') or {}),
+        'memoria_subtemas': bool(extra.get('memoria_subtemas', extra.get('memoria', True))),
         'tipo_por_actor': bool(extra.get('tipo_por_actor')),
         'api_key': api_key,
         'typesafe_api_key': extra.get('typesafe_api_key') or '',
@@ -9195,6 +9198,8 @@ def enrich_rows_with_ai(
     _mem: Dict[str, dict] = {}
     _mem_huella = ''
     _ULTIMO_RESUMEN.pop('memoria', None)
+    _ULTIMO_RESUMEN.pop('subtemas_politicos', None)
+    _ULTIMO_RESUMEN.pop('subtemas_de_corridas_previas', None)
     _ULTIMO_RESUMEN.pop('para_revisar', None)
     if haiku and cfg.get('memoria'):
         import memoria_cliente
@@ -9667,6 +9672,22 @@ def enrich_rows_with_ai(
         # Clausifier: guarda final de forma del subtema (modo Haiku).
         _ULTIMO_RESUMEN['subtemas_forma_final'] = guarda_final_forma_subtema(
             rows, km, {i: subtemas_originales.get(g) or '' for i, g in mapa.items() if g})
+
+    # v1.37: memoria de subtemas del boletín (corridas cada 30-60 min): la
+    # noticia igual o muy parecida a una ya vista conserva su subtema.
+    if cfg.get('memoria_subtemas'):
+        import memoria_cliente
+        _ancl = anclar_subtemas_previos(rows, km, memoria_cliente.cargar_subtemas(brand, extra))
+        _ULTIMO_RESUMEN['subtemas_de_corridas_previas'] = _ancl
+    # v1.37: subtemas políticos fijos del perfil (aspirantes a la Alcaldía,
+    # Petro como alcalde): mandan sobre todo lo anterior, memoria incluida.
+    _pol_fijos = aplicar_subtemas_politicos(
+        rows, km, cfg.get('subtemas_politicos'), voceros=cfg.get('voceros') or [],
+        con_tipo=bool(cfg.get('clasificar_tipo_genero')))
+    if _pol_fijos['aspirantes'] or _pol_fijos['petro']:
+        _ULTIMO_RESUMEN['subtemas_politicos'] = {k: _pol_fijos[k] for k in ('aspirantes', 'petro')}
+    if cfg.get('memoria_subtemas'):
+        guardar_subtemas_corrida(rows, km, brand, extra)
 
     _etapa('Pase final por noticia')
     if haiku:
@@ -11103,6 +11124,179 @@ def aplicar_tipo_politica_ajena(grupos, etiquetas, terminos, voceros=()):
             e['tipo'] = 'Información general'
             cambiados.append(g.get('grupo'))
     return cambiados
+
+
+# ============================================================================
+# v1.37 (2026-11-15, definición del cliente): subtemas políticos fijos.
+# - Aspirantes: toda nota sobre personas que quieren ser alcalde de Bogotá
+#   (candidatos, precandidatos, aspirantes, encuestas, campañas) =>
+#   Subtema «Aspirantes Alcaldía de Bogotá», Neutro, Información general.
+# - Petro como alcalde (candidato a la Alcaldía, exalcalde, «cuando Petro
+#   era alcalde») => Subtema «Entorno Gustavo Petro», Neutro, Información
+#   general. Petro tiene prioridad sobre Aspirantes.
+# El GÉNERO no se toca: sigue siendo el que corresponde (Noticia, Opinión,
+# Reportaje, Entrevista). Corre sobre las filas ya volcadas, después de
+# todas las unificaciones, así ningún pase posterior lo deshace.
+# ============================================================================
+SUBTEMA_ASPIRANTES_DEFECTO = 'Aspirantes Alcaldía de Bogotá'
+SUBTEMA_PETRO_DEFECTO = 'Entorno Gustavo Petro'
+
+_RX_ALCALDIA = re.compile(r'\balcald(?:ia|e|esa|able)s?\b')
+_RX_ELECTORAL_ASP = re.compile(
+    r'\b(?:candidat[oa]s?|precandidat[oa]s?|aspirantes?|aspira|aspiraria|candidaturas?|'
+    r'precandidaturas?|elecciones|electoral(?:es)?|campana|intencion de voto|encuestas?|'
+    r'consulta|coalicion|inscribe|inscribio|inscripcion|avales?|tarjeton|comicios|'
+    r'contienda|carrera)\b')
+_RX_QUIERE_SER = re.compile(
+    r'\b(?:quiere|quieren|queria|busca|buscan|buscara|buscaria|aspira|aspiran|suena|suenan|'
+    r'pretende|pretenden)\s+(?:ser|llegar a ser)\s+(?:el\s+|la\s+)?(?:proxim[oa]\s+)?alcald'
+    r'|\b(?:se lanza|se lanzan|se lanzo|lanza|lanzo|ira|iria|va|van|irian|se medira|se mediria)\s+'
+    r'(?:a|por)\s+la\s+alcaldia'
+    r'|\bproxim[oa]s?\s+alcald(?:e|esa|es)\b'
+    r'|\b(?:candidat[oa]s?|precandidat[oa]s?|aspirantes?|candidatura|precandidatura)\s+'
+    r'(?:a|de|por)\s+la\s+alcaldia'
+    r'|\bcarrera\s+(?:a|por|hacia)\s+la\s+alcaldia')
+_RX_PASADO_CANDIDATO = re.compile(
+    r'\b(?:cuando|como|siendo|mientras)\s+(?:era|fue|aun era)?\s*(?:candidat|aspirant)'
+    r'|\b(?:fue|era)\s+candidat')
+_RX_ALCALDIA_DE = re.compile(r'\balcald\w*\s+(?:mayor\s+)?(?:de|del)\s+(?:la\s+)?(\w+)')
+_RX_PETRO_ALCALDE = re.compile(
+    r'\b(?:exalcalde|ex alcalde|alcald\w*|candidat\w*|aspira\w*|candidatura|precandidat\w*|'
+    r'bogota humana)\b')
+_RX_PETRO_LEAD = re.compile(
+    r'\bpetro\b.{0,60}\b(?:alcaldia|alcalde|exalcalde)\b'
+    r'|\b(?:alcaldia|exalcalde|administracion)\s+(?:de\s+)?(?:gustavo\s+)?petro\b')
+
+
+def _alcaldia_de_otra_ciudad(t: str) -> bool:
+    """True si el texto nombra «alcaldía de X» y ninguna X es Bogotá."""
+    ciudades = [m.group(1) for m in _RX_ALCALDIA_DE.finditer(t)]
+    ciudades = [c for c in ciudades if c not in ('la', 'el', 'los', 'las')]
+    return bool(ciudades) and not any(c.startswith('bogota') for c in ciudades)
+
+
+def es_nota_aspirantes_alcaldia(titulo: str, hecho: str = '', voceros=()) -> bool:
+    """Nota sobre personas que quieren ser alcalde de Bogotá."""
+    t = nz(titulo)
+    if not t or _alcaldia_de_otra_ciudad(t):
+        return False
+    if _RX_QUIERE_SER.search(t):
+        return True
+    if _RX_ALCALDIA.search(t) and _RX_ELECTORAL_ASP.search(t) \
+            and not _RX_PASADO_CANDIDATO.search(t):
+        # «alcalde» + término electoral en el titular. Si el único «alcalde»
+        # es el actual (Galán) y el término es genérico («encuesta»), no basta.
+        if re.search(r'\b(?:candidat|precandidat|aspirant|candidatura|elecciones|campana|'
+                     r'intencion de voto|comicios|carrera|contienda)', t):
+            return True
+        if re.search(r'\bencuestas?\b', t) and re.search(r'\balcaldia\b', t):
+            return True
+    h = nz(hecho)[:400]
+    if h and not _alcaldia_de_otra_ciudad(h) and _RX_QUIERE_SER.search(h) \
+            and not _RX_PASADO_CANDIDATO.search(h):
+        # Por la entrada solo si el titular no trata de un vocero propio
+        # (la gestión del alcalde actual no es una nota de aspirantes).
+        propios = [nz(v) for v in (voceros or [])
+                   if v and str(v)[:1].isupper() and len(nz(v)) >= 4]
+        if not any(re.search(r'\b' + re.escape(p) + r'\b', t) for p in propios):
+            return bool(_RX_ELECTORAL_ASP.search(t) or _RX_ALCALDIA.search(t)
+                        or re.search(r'\b(?:bogota|politic\w*)\b', t))
+    return False
+
+
+def es_nota_petro_alcalde(titulo: str, hecho: str = '') -> bool:
+    """Nota sobre Gustavo Petro como alcalde (candidato a la Alcaldía,
+    exalcalde, su administración en Bogotá)."""
+    t = nz(titulo)
+    if not re.search(r'\bpetro\b', t):
+        return False
+    if _alcaldia_de_otra_ciudad(t):
+        return False
+    if _RX_PETRO_ALCALDE.search(t):
+        return True
+    return bool(_RX_PETRO_LEAD.search(nz(hecho)[:400]))
+
+
+def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict],
+                               voceros=(), con_tipo: bool = True) -> dict:
+    """Fija Subtema_IA, Tono_IA (Neutro) y TIPO (Información general) en las
+    notas de aspirantes a la Alcaldía y de Petro como alcalde. `reglas` es el
+    campo `subtemas_politicos` del perfil: {"aspirantes": rótulo, "petro":
+    rótulo}; una clave vacía o ausente apaga esa regla. Devuelve
+    {"aspirantes": n, "petro": n, "filas": [índices]}."""
+    reglas = reglas or {}
+    sub_asp = str(reglas.get('aspirantes') or '').strip()
+    sub_pet = str(reglas.get('petro') or '').strip()
+    out = {'aspirantes': 0, 'petro': 0, 'filas': []}
+    if not (sub_asp or sub_pet):
+        return out
+    for i, row in enumerate(rows):
+        if row.get('is_duplicate'):
+            continue
+        tit = _titulo_fila(row, km)
+        hecho = _texto_fila(row, km)[:400]
+        rotulo = ''
+        if sub_pet and es_nota_petro_alcalde(tit, hecho):
+            rotulo, clave_r = sub_pet, 'petro'
+        elif sub_asp and es_nota_aspirantes_alcaldia(tit, hecho, voceros=voceros):
+            rotulo, clave_r = sub_asp, 'aspirantes'
+        if not rotulo:
+            continue
+        row['Subtema_IA'] = rotulo
+        row['Tono_IA'] = 'Neutro'
+        if con_tipo:
+            row['TIPO'] = 'Información general'
+        out['filas'].append(i)
+        out[clave_r] += 1
+    return out
+
+
+def anclar_subtemas_previos(rows: List[dict], km: dict, entradas: list) -> int:
+    """v1.37: una noticia igual o muy parecida a una ya vista en una corrida
+    anterior (memoria de subtemas del boletín) conserva aquel Subtema_IA.
+    Se decide por noticia: todas las filas que en esta corrida comparten
+    subtema heredan el previo si las que coinciden con la memoria apuntan a
+    uno solo. Devuelve cuántas filas cambiaron."""
+    import memoria_cliente
+    if not entradas:
+        return 0
+    previo: Dict[int, str] = {}
+    for i, row in enumerate(rows):
+        if row.get('is_duplicate'):
+            continue
+        sp = memoria_cliente.buscar_subtema(entradas, _titulo_fila(row, km), _texto_fila(row, km))
+        if sp:
+            previo[i] = sp
+    if not previo:
+        return 0
+    por_sub: Dict[str, List[int]] = defaultdict(list)
+    for i, row in enumerate(rows):
+        if not row.get('is_duplicate'):
+            por_sub[nz(str(row.get('Subtema_IA') or ''))].append(i)
+    cambios = 0
+    for clave_s, idxs in por_sub.items():
+        vistos = {previo[i] for i in idxs if i in previo}
+        if not vistos:
+            continue
+        destino = {i: next(iter(vistos)) for i in idxs} if (len(vistos) == 1 and clave_s) \
+            else {i: previo[i] for i in idxs if i in previo}
+        for i, sp in destino.items():
+            if str(rows[i].get('Subtema_IA') or '') != sp:
+                rows[i]['Subtema_IA'] = sp
+                cambios += 1
+    return cambios
+
+
+def guardar_subtemas_corrida(rows: List[dict], km: dict, brand: str, extra=None) -> int:
+    """v1.37: guarda el Subtema_IA final de cada noticia para la próxima corrida."""
+    import memoria_cliente
+    nuevas = []
+    for row in rows:
+        sub = str(row.get('Subtema_IA') or '').strip()
+        if row.get('is_duplicate') or not sub or sub == '-':
+            continue
+        nuevas.append(memoria_cliente._entrada(_titulo_fila(row, km), _texto_fila(row, km), sub))
+    return memoria_cliente.guardar_subtemas(brand, nuevas, extra)
 
 
 def aplicar_regla_neutro_titulo(grupos, etiquetas, terminos, voceros=(), electoral=False):
