@@ -21,6 +21,58 @@ from pipeline import (process_dossier, leer_columnas_xlsx, sugerir_columna,
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
 APP_VERSION = "v1.37"
 
+
+def _historial_dir_secreto():
+    try:
+        return st.secrets.get("HISTORIAL_DIR")
+    except Exception:
+        return None
+
+
+def _render_descarga_memoria(brand: str, clave: str) -> None:
+    """v1.37: descarga la memoria de subtemas del boletín (JSON)."""
+    import memoria_cliente
+    brand = (brand or "").strip()
+    if not brand:
+        return
+    extra = {"historial_dir": _historial_dir_secreto()}
+    n = len(memoria_cliente.cargar_subtemas(brand, extra))
+    if not n:
+        return
+    st.download_button(
+        f"⬇ Descargar memoria de subtemas ({n} noticias)",
+        data=memoria_cliente.exportar_subtemas(brand, extra),
+        file_name="memoria_subtemas_%s.json" % slugify(brand),
+        mime="application/json", key="dl_mem_sub_" + clave,
+        help="Guárdala al terminar la jornada y súbela al abrir la app de nuevo: Streamlit Cloud "
+             "borra la memoria cuando la app se reinicia o se vuelve a publicar.")
+
+
+def _render_memoria_subtemas(brand: str, clave: str) -> None:
+    """v1.37: subir y descargar la memoria de subtemas del boletín."""
+    import memoria_cliente
+    brand = (brand or "").strip()
+    with st.expander("🧠 Memoria de subtemas del boletín"):
+        if not brand:
+            st.caption("Escribe la marca del cliente para cargar o descargar su memoria.")
+            return
+        extra = {"historial_dir": _historial_dir_secreto()}
+        n = len(memoria_cliente.cargar_subtemas(brand, extra))
+        st.caption(f"Noticias en memoria (últimos {memoria_cliente.DIAS_SUBTEMAS} días): {n}. "
+                   "Si la app se reinició y quedó en 0, sube el último archivo que descargaste.")
+        archivo = st.file_uploader("Subir memoria de subtemas (JSON)", type=["json"],
+                                   key="up_mem_sub_" + clave)
+        if archivo is not None:
+            marca = (archivo.name, archivo.size, brand)
+            if st.session_state.get("_mem_sub_importada") != marca:
+                try:
+                    k = memoria_cliente.importar_subtemas(brand, archivo.getvalue(), extra)
+                    st.session_state["_mem_sub_importada"] = marca
+                    st.success(f"Memoria cargada: {k} noticias vigentes.")
+                except ValueError as exc:
+                    st.error(str(exc))
+        _render_descarga_memoria(brand, clave)
+
 # v1.2: cliente fijo de este repo. Se muestra en la pantalla de
 # contraseña y en un aviso permanente tras ingresar, para que las
 # dos apps (mismo diseño, mismo título de sistema) nunca se confundan.
@@ -867,6 +919,7 @@ def main():
                                  "una noticia igual o muy parecida a una vista en los últimos 3 días "
                                  "conserva el subtema que tuvo en el boletín anterior. Desmárcalo para "
                                  "clasificar todo de nuevo.")
+                        _render_memoria_subtemas(brand_input, clave="cfg")
                         st.markdown("**💾 Perfil de cliente**")
                         guardar_chk = st.checkbox(
                             "Guardar esta configuración como perfil al procesar",
@@ -1334,6 +1387,8 @@ def main():
                     piezas.append(f"{_ag} agentes clasificaron en paralelo")
                 if piezas:
                     st.info("**Análisis de Tono/Tema/Sub-tema**\n" + "\n".join("- " + x for x in piezas))
+                # v1.37: la memoria de subtemas ya incluye esta corrida.
+                _render_descarga_memoria(st.session_state.get("brand_input") or "", clave="res")
                 if errores:
                     st.caption("Avisos del modelo: " + " | ".join(map(str, errores[:2])))
                 temas_gen = analisis.get("taxonomia") or []

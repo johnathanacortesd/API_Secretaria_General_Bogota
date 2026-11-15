@@ -211,3 +211,53 @@ def borrar_subtemas(brand: str, extra=None) -> bool:
         return True
     except OSError:
         return False
+
+
+def exportar_subtemas(brand: str, extra=None) -> bytes:
+    """Memoria de subtemas vigente como JSON, para descargarla y volver a
+    subirla en otra sesión (Streamlit Cloud borra el disco al reiniciar)."""
+    data = {"cliente": brand, "tipo": "memoria_subtemas",
+            "entradas": cargar_subtemas(brand, extra)}
+    return json.dumps(data, ensure_ascii=False, indent=1).encode("utf-8")
+
+
+def importar_subtemas(brand: str, contenido, extra=None) -> int:
+    """Fusiona un JSON descargado con `exportar_subtemas` con la memoria
+    actual. Por titular gana la entrada más reciente; cada una conserva su
+    fecha, así lo vencido (más de DIAS_SUBTEMAS) se descarta solo.
+    Devuelve cuántas entradas vigentes se importaron. Lanza ValueError si
+    el archivo no es una memoria de subtemas."""
+    if isinstance(contenido, (bytes, bytearray)):
+        contenido = contenido.decode("utf-8-sig")
+    try:
+        data = json.loads(contenido)
+    except ValueError as exc:
+        raise ValueError("El archivo no es un JSON válido.") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("entradas"), list):
+        raise ValueError("El archivo no es una memoria de subtemas descargada de la app.")
+    limite = (datetime.now() - timedelta(days=DIAS_SUBTEMAS)).isoformat(timespec="seconds")
+    por_tit = {_n(e.get("titulo")): e for e in cargar_subtemas(brand, extra) if _n(e.get("titulo"))}
+    importadas = 0
+    for e in data["entradas"]:
+        if not isinstance(e, dict) or not str(e.get("subtema") or "").strip():
+            continue
+        k, fecha = _n(e.get("titulo")), str(e.get("fecha") or "")
+        if not k or fecha < limite:
+            continue
+        actual = por_tit.get(k)
+        if actual is None or fecha > str(actual.get("fecha") or ""):
+            por_tit[k] = {"titulo": str(e.get("titulo") or "")[:300],
+                          "texto": str(e.get("texto") or "")[:500],
+                          "subtema": str(e["subtema"]).strip(), "fecha": fecha}
+        importadas += 1
+    try:
+        entradas = sorted(por_tit.values(), key=lambda x: x.get("fecha") or "",
+                          reverse=True)[:MAX_SUBTEMAS]
+        ruta = _ruta_subtemas(brand, extra)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(ruta), suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"entradas": entradas}, f, ensure_ascii=False)
+        os.replace(tmp, ruta)
+    except OSError:
+        return 0
+    return importadas

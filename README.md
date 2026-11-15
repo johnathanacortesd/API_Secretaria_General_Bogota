@@ -29,6 +29,14 @@ un xlsx corregido.
   que en esta corrida comparten su subtema. No depende de la huella de
   configuración, así un ajuste del perfil no la borra. Se apaga con la
   casilla «Reutilizar clasificaciones previas» (`memoria_subtemas: false`).
+- **Descargar y subir la memoria** (Streamlit Cloud borra el disco al
+  reiniciar o volver a publicar la app): en la configuración, el panel
+  «🧠 Memoria de subtemas del boletín» muestra cuántas noticias hay en
+  memoria, permite subir el JSON guardado y descargarlo; en los resultados
+  de cada corrida hay un botón «⬇ Descargar memoria de subtemas». Rutina:
+  descargarla al terminar la jornada y subirla al abrir la app. Al subirla
+  se fusiona con lo que haya (por titular gana lo más reciente) y lo
+  vencido (más de 3 días) se descarta.
 - Pruebas: `tests/test_v137_subtemas_politicos_memoria.py`.
 
 ### v1.36 — Contexto analizado por segmentos y tono «respuesta» (2026-11-14)

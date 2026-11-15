@@ -73,3 +73,22 @@ def test_anclar_por_noticia(tmp_path):
     assert n == 2
     assert rows[0]['Subtema_IA'] == rows[1]['Subtema_IA'] == "Obras del metro en la Avenida 68"
     assert rows[2]['Subtema_IA'] == 'Hurto en Suba'
+
+
+def test_exportar_importar_memoria(tmp_path):
+    import json
+    import pytest
+    ext_a, ext_b = {'historial_dir': str(tmp_path / 'a')}, {'historial_dir': str(tmp_path / 'b')}
+    m.guardar_subtemas('Cliente', [m._entrada("Hurto en Kennedy deja un herido", "", "Hurto en Kennedy")], ext_a)
+    data = m.exportar_subtemas('Cliente', ext_a)
+    # sesión nueva (disco vacío): se sube el archivo y la memoria vuelve
+    assert m.cargar_subtemas('Cliente', ext_b) == []
+    assert m.importar_subtemas('Cliente', data, ext_b) == 1
+    ent = m.cargar_subtemas('Cliente', ext_b)
+    assert m.buscar_subtema(ent, "Hurto en Kennedy deja un herido") == "Hurto en Kennedy"
+    # entradas vencidas no se importan
+    viejo = json.dumps({'entradas': [{'titulo': 'Nota vieja de ayer y antier', 'subtema': 'X',
+                                      'fecha': '2000-01-01T00:00:00'}]})
+    assert m.importar_subtemas('Cliente', viejo, ext_b) == 0
+    with pytest.raises(ValueError):
+        m.importar_subtemas('Cliente', b'no es json', ext_b)
