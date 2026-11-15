@@ -5,6 +5,23 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.38 — GÉNERO por URL solo con la sección del enlace (2026-11-15)
+
+- Una nota de minuto30.com («incendio-cerca-de-la-autopista-sur-genero-una-
+  **columna**-de-humo-...») salía **Opinión** (y TIPO Opinión de terceros)
+  porque la regla buscaba «columna» en cualquier parte de la URL, incluido
+  el titular del slug. Ahora (`genero_por_url`) solo cuenta la **sección**
+  del enlace: un subdominio (`opinion.medio.com`) o un segmento corto de la
+  ruta (`/opinion/`, `/columnistas/`, `/editorial/`). El slug largo de la
+  nota no cuenta: «columna de humo», «columna vertebral» o
+  «editorial-planeta-...» siguen siendo Noticia.
+- La Sección - Programa cuenta por palabra completa (`seccion_es_opinion`).
+- Aplica en las tres reglas: `aplicar_opinion_haiku`, `aplicar_genero_por_url`
+  y el dato `url_contiene_opinion` que recibe el modelo. Las instrucciones
+  del modelo aclaran que la palabra «columna» en el titular no es Opinión
+  (la memoria de clasificaciones se renueva una vez por este cambio).
+- Pruebas: `tests/test_v138_genero_url_columna.py`.
+
 ### v1.37 — Subtemas políticos fijos y memoria de subtemas del boletín (2026-11-15)
 
 - **Aspirantes a la Alcaldía** (perfil `subtemas_politicos.aspirantes`): toda

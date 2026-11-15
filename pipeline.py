@@ -21,7 +21,8 @@ from openpyxl import load_workbook
 from openpyxl.utils.cell import column_index_from_string, coordinate_from_string, range_boundaries
 from unidecode import unidecode
 
-from analyzer_tono_tema import enrich_rows_with_ai, ultimo_resumen, aplicar_prominencia, _quitar_nombre_la_opinion
+from analyzer_tono_tema import (enrich_rows_with_ai, ultimo_resumen, aplicar_prominencia,
+                                _quitar_nombre_la_opinion, genero_por_url, seccion_es_opinion)
 from coherencia_texto import texto_sin_titulo
 from pkl_classifier import (
     apply_pkl_classifiers,
@@ -943,13 +944,16 @@ def aplicar_genero_por_url(rows) -> int:
         url = _quitar_nombre_la_opinion((_url_web_ext(row) or '').lower())
         # v1.20: orden Editorial -> Reportaje -> Opinión; solo desde
         # Noticia (las demás guardas no cambian).
-        if any(s in url for s in _EDITORIAL_URL_STEMS):
+        # v1.38: solo la sección del enlace (subdominio o segmento corto),
+        # no el titular del slug («...-columna-de-humo-...» no es Opinión).
+        por_url = genero_por_url(url)
+        if por_url == 'Editorial':
             row['GÉNERO'] = 'Editorial'
             cambios += 1
         elif _url_es_reportaje(url):
             row['GÉNERO'] = 'Reportaje'
             cambios += 1
-        elif any(s in url for s in _OPINION_URL_STEMS):
+        elif por_url == 'Opinión':
             row['GÉNERO'] = 'Opinión'
             cambios += 1
     return cambios
@@ -978,12 +982,13 @@ def aplicar_opinion_haiku(rows, brand="", aliases=(), voceros=()) -> int:
     for row in rows:
         if row.get('is_duplicate') or (row.get('GÉNERO') or '') in ('', '-'):
             continue
-        url = _quitar_nombre_la_opinion(_norm_simple(_url_web_ext(row)))
+        # v1.38: la URL cuenta solo por su sección (no por el titular del
+        # slug) y la Sección por palabra completa.
+        por_url = genero_por_url(_url_web_ext(row))
         sec = _quitar_nombre_la_opinion(_norm_simple(row.get('Sección - Programa')))
-        evidencia = url + ' ' + sec
-        if 'editorial' in evidencia:
+        if por_url == 'Editorial' or re.search(r'\beditorial(?:es)?\b', sec):
             nuevo = 'Editorial'
-        elif any(s in evidencia for s in _OPINION_URL_STEMS):
+        elif por_url == 'Opinión' or seccion_es_opinion(sec):
             nuevo = 'Opinión'
         else:
             continue

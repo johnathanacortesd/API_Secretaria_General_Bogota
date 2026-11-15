@@ -916,7 +916,7 @@ TIPO (Tipo de información), exactamente uno de (definiciones del cliente):
 Cómo decidir: si es un ranking, Ranking. Si es la opinión de un tercero sobre la marca, Opinión de terceros. Si la nota destaca algo que la entidad HACE para la ciudadanía, Programas y proyectos (aunque lo anuncie el alcalde). Si trata de la entidad, la Alcaldía o el alcalde en sí, Institucional. En cualquier otro caso, Información general.
 
 GÉNERO (Género de información, el género periodístico), exactamente uno de: Noticia, Reportaje, Opinión, Entrevista, Editorial.
-- Opinión: columna o texto de opinión firmado. Si "url_contiene_opinion" es true, o "seccion_programa" es una sección de opinión o de columnas (Opinión, Columnistas, Columna), el GÉNERO es Opinión. El diario La Opinión (laopinion) NO es una sección de opinión.
+- Opinión: columna o texto de opinión firmado. Si "url_contiene_opinion" es true, o "seccion_programa" es una sección de opinión o de columnas (Opinión, Columnistas, Columna), el GÉNERO es Opinión. El diario La Opinión (laopinion) NO es una sección de opinión. La palabra «columna» en el titular o en el texto de una nota NO la vuelve Opinión («columna de humo», «columna vertebral», «columna de agua», «columna del Ejército»): Opinión exige un texto de opinión firmado.
 - Editorial: la voz institucional del medio (sección Editorial).
 - Entrevista: diálogo de preguntas y respuestas.
 - Reportaje: es POCO frecuente. Solo con evidencia fuerte: la sección o la URL dicen reportaje, especial, crónica o investigación, o el texto es un trabajo largo con varias fuentes y estructura narrativa. Una noticia SOBRE una investigación (de la Fiscalía, de la Policía, un informe) es Noticia. Ante la duda, Noticia.

@@ -2239,6 +2239,46 @@ def _quitar_nombre_la_opinion(s: str) -> str:
     return t
 
 
+# v1.38 (2026-11-15): GÉNERO por URL solo con la SECCIÓN del enlace, nunca
+# con el titular que va en el slug. Caso real (minuto30.com): «incendio-
+# cerca-de-la-autopista-sur-genero-una-columna-de-humo-visible-...» salía
+# Opinión por la subcadena «columna». Cuenta un subdominio (opinion.medio.com)
+# o un segmento de ruta corto (hasta 3 palabras: /opinion/, /columnistas/,
+# /opinion-y-analisis/); el slug largo de la nota no cuenta.
+_URL_OPINION_TOK = re.compile(r'^(?:opinion|opiniones|columnas?|columnistas?|columnists?)$')
+_URL_EDITORIAL_TOK = re.compile(r'^editorial(?:es)?$')
+_SECCION_OPINION_PAT = re.compile(r'\b(?:opinion|opiniones|columnas?|columnistas?|columnists?)\b')
+
+
+def _segmentos_seccion_url(url: str) -> List[List[str]]:
+    """Palabras de los subdominios y de los segmentos de ruta cortos."""
+    u = _quitar_nombre_la_opinion(str(url or '').lower().strip())
+    u = re.sub(r'^[a-z]+://', '', u).split('?')[0].split('#')[0]
+    partes = u.split('/')
+    host, ruta = partes[0], partes[1:]
+    segs = [[lbl] for lbl in host.split('.')[:-2]]
+    for seg in ruta:
+        toks = [t for t in re.split(r'[-_.+]+', seg) if t and not t.isdigit()]
+        if 1 <= len(toks) <= 3:
+            segs.append(toks)
+    return segs
+
+
+def genero_por_url(url: str) -> str:
+    """'Editorial', 'Opinión' o '' según la sección del enlace."""
+    segs = _segmentos_seccion_url(url)
+    if any(_URL_EDITORIAL_TOK.match(t) for sg in segs for t in sg):
+        return 'Editorial'
+    if any(_URL_OPINION_TOK.match(t) for sg in segs for t in sg):
+        return 'Opinión'
+    return ''
+
+
+def seccion_es_opinion(seccion) -> bool:
+    """Sección - Programa de opinión o columnas (palabra completa)."""
+    return bool(_SECCION_OPINION_PAT.search(_quitar_nombre_la_opinion(nz(str(seccion or '')))))
+
+
 # Clausifier 2026-11-08: la Sección marca Reportaje solo si ES la sección de
 # reportajes/especiales/crónicas/investigación (palabra completa al inicio
 # o como nombre entero), no si una sección de noticias contiene la palabra.
@@ -2285,7 +2325,7 @@ def aplicar_genero_por_seccion(rows, mapa, etiquetas, km):
                 cambios += 1
                 break
             # "columnist": "Columnistas" no contiene "columna".
-            if "opinion" in sec or "columna" in sec or "columnist" in sec:
+            if seccion_es_opinion(sec):
                 e["genero"] = "Opinión"
                 cambios += 1
                 break
@@ -8267,8 +8307,8 @@ def _campos_tipo_genero_haiku(rows: List[dict], idxs: Sequence[int], km: dict) -
             v = str(r.get(col) or '').strip()
             if not out[clave] and v and v.lower() not in ('nan', 'none'):
                 out[clave] = v
-        url = _quitar_nombre_la_opinion(str(r.get('URL Nota') or r.get('Web Ext') or '').lower())
-        if any(s in url for s in ('opinion', 'columna', 'columnist')):
+        # v1.38: solo la sección del enlace, no el titular del slug.
+        if genero_por_url(str(r.get('URL Nota') or r.get('Web Ext') or '')) == 'Opinión':
             out['url_opinion'] = True
     return out
 # Rótulos que escribió el modelo en esta corrida (el pase por noticia los prefiere).
