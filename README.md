@@ -5,6 +5,40 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.37 — Subtemas políticos fijos y memoria de subtemas del boletín (2026-11-15)
+
+- **Aspirantes a la Alcaldía** (perfil `subtemas_politicos.aspirantes`): toda
+  nota sobre personas que quieren ser alcalde de Bogotá (candidatos,
+  precandidatos, aspirantes, «se lanza a la Alcaldía», «próximo alcalde»,
+  encuestas e intención de voto) queda en el subtema **«Aspirantes Alcaldía
+  de Bogotá»**, tono **Neutro** y TIPO **Información general**. No cuentan
+  las alcaldías de otras ciudades.
+- **Petro como alcalde** (`subtemas_politicos.petro`): titular que nombra a
+  Petro con la Alcaldía (candidato, exalcalde, «cuando Petro era alcalde»,
+  su administración) => **«Entorno Gustavo Petro»**, Neutro, Información
+  general. Tiene prioridad sobre Aspirantes.
+- El **GÉNERO no se fija**: sigue siendo Noticia, Opinión, Reportaje o
+  Entrevista según la nota. Las reglas corren sobre las filas ya volcadas,
+  después de todas las unificaciones (`aplicar_subtemas_politicos`).
+- **Memoria de subtemas del boletín** (`memoria_cliente.cargar_subtemas`):
+  cada corrida guarda título, comienzo del texto y subtema final de cada
+  noticia (`historial/subtemas_<cliente>.json`, 3 días). En la corrida
+  siguiente, una noticia igual (mismo titular) o muy parecida (titulares
+  con casi las mismas palabras y los mismos nombres propios, o el mismo
+  comienzo del texto) conserva aquel subtema, y con ella las demás notas
+  que en esta corrida comparten su subtema. No depende de la huella de
+  configuración, así un ajuste del perfil no la borra. Se apaga con la
+  casilla «Reutilizar clasificaciones previas» (`memoria_subtemas: false`).
+- **Descargar y subir la memoria** (Streamlit Cloud borra el disco al
+  reiniciar o volver a publicar la app): en la configuración, el panel
+  «🧠 Memoria de subtemas del boletín» muestra cuántas noticias hay en
+  memoria, permite subir el JSON guardado y descargarlo; en los resultados
+  de cada corrida hay un botón «⬇ Descargar memoria de subtemas». Rutina:
+  descargarla al terminar la jornada y subirla al abrir la app. Al subirla
+  se fusiona con lo que haya (por titular gana lo más reciente) y lo
+  vencido (más de 3 días) se descarta.
+- Pruebas: `tests/test_v137_subtemas_politicos_memoria.py`.
+
 ### v1.36 — Contexto analizado por segmentos y tono «respuesta» (2026-11-14)
 
 - **Contexto analizado** (`contexto_cliente.py`): ya no son las tres primeras
