@@ -5,6 +5,20 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.39 — «Columna de humo» no es Opinión, ni por el modelo ni por la memoria (2026-11-15)
+
+- Tras la v1.38 la nota de minuto30.com seguía en Opinión: la **memoria de
+  clasificaciones** la reutilizaba con su GÉNERO viejo, porque la huella
+  solo incluía el prompt base y no el bloque de TIPO/GÉNERO. Ahora la huella
+  usa el prompt completo (`system_prompt(con_tipo_genero)`): cualquier cambio
+  en las reglas de TIPO o GÉNERO renueva la memoria.
+- Guardia nueva `aplicar_guardia_columna_no_opinion`: si el titular trae una
+  «columna» física o militar (de humo, de agua, vertebral, del Ejército,
+  militar...) y ni la URL ni la Sección ni el titular dicen opinión o
+  columnista, una Opinión baja a **Noticia** (y «Opinión de terceros» a
+  Información general). Corre al final del análisis, antes de guardar la
+  memoria, y otra vez en el pipeline antes de exportar, con cualquier motor.
+
 ### v1.38 — GÉNERO por URL solo con la sección del enlace (2026-11-15)
 
 - Una nota de minuto30.com («incendio-cerca-de-la-autopista-sur-genero-una-

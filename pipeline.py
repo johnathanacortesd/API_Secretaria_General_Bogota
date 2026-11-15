@@ -22,7 +22,8 @@ from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
 from unidecode import unidecode
 
 from analyzer_tono_tema import (enrich_rows_with_ai, ultimo_resumen, aplicar_prominencia,
-                                _quitar_nombre_la_opinion, genero_por_url, seccion_es_opinion)
+                                _quitar_nombre_la_opinion, genero_por_url, seccion_es_opinion,
+                                aplicar_guardia_columna_no_opinion)
 from coherencia_texto import texto_sin_titulo
 from pkl_classifier import (
     apply_pkl_classifiers,
@@ -2077,6 +2078,9 @@ def process_dossier(
         aplicar_opinion_haiku(rows, ai_config.get("brand") or "",
                               ai_config.get("aliases") or [],
                               ai_extra.get("voceros") or ai_config.get("voceros") or [])
+    # v1.39: «columna de humo», «columna del Ejército»... no son Opinión,
+    # la haya puesto el modelo, la memoria o una regla (cualquier motor).
+    aplicar_guardia_columna_no_opinion(rows)
 
     # v1.18/v1.14: FECHA INFORME siempre es la fecha de procesamiento
     # (Bogotá), en cualquier camino que la exporte — no solo en formato

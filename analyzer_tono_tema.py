@@ -2279,6 +2279,57 @@ def seccion_es_opinion(seccion) -> bool:
     return bool(_SECCION_OPINION_PAT.search(_quitar_nombre_la_opinion(nz(str(seccion or '')))))
 
 
+# v1.39 (2026-11-15): «columna» que no es de opinión. El titular «Incendio
+# ... generó una columna de humo visible...» (minuto30.com) salía Opinión
+# por el modelo o por la memoria aunque la URL ya no lo marcara.
+_COLUMNA_NO_OPINION = re.compile(
+    r'\bcolumnas? (?:de|del|de la|de los|de las) (?:(?:densa|espesa|gran|enorme|negra|blanca|gris) )?'
+    r'(?:humo|agua|fuego|llamas|ceniza|cenizas|vapor|polvo|gas|aire|mercurio|lava|tierra|lodo|'
+    r'vehiculos|carros|camiones|tropas|soldados|militares|policias|uniformados|manifestantes|'
+    r'marchantes|personas|ejercito|policia|guerrilla|eln|farc|disidencias|marcha|caravana|'
+    r'refrigeracion|concreto|acero|soporte|edificio|puente|estacion|viaducto)\b'
+    r'|\bcolumnas? (?:vertebral|vertebrales|militar|militares|guerrillera|guerrilleras|armada|'
+    r'blindada|movil|moviles|de soporte|estructural|estructurales)\b'
+    r'|\b(?:humo|fuego|vapor|ceniza) en columna\b')
+_MARCA_OPINION_TEXTO = re.compile(
+    r'\b(?:columnista|columnistas|columna de opinion|opinion|opina|editorial|tribuna|punto de vista)\b')
+
+
+def nota_columna_no_opinion(titulo: str, url: str = '', seccion: str = '') -> bool:
+    """True si la única pista de Opinión es una «columna» física o militar
+    del titular (humo, agua, vertebral, del Ejército...) y ni la URL ni la
+    Sección ni el titular dicen opinión o columnista."""
+    t = nz(titulo)
+    if not t or not _COLUMNA_NO_OPINION.search(t):
+        return False
+    if genero_por_url(url) or seccion_es_opinion(seccion):
+        return False
+    resto = _COLUMNA_NO_OPINION.sub(' ', t)
+    return not _MARCA_OPINION_TEXTO.search(resto) and 'columna' not in resto
+
+
+def aplicar_guardia_columna_no_opinion(rows: List[dict], km: Optional[dict] = None) -> int:
+    """GÉNERO Opinión -> Noticia cuando «columna» es la de humo, agua, del
+    Ejército, etc. (ver `nota_columna_no_opinion`). Si la regla de opinión
+    había puesto TIPO «Opinión de terceros», vuelve a Información general.
+    No toca duplicadas. Devuelve filas cambiadas."""
+    km = km or {}
+    sec_col = km.get('seccion_programa', 'Sección - Programa')
+    cambios = 0
+    for row in rows:
+        if row.get('is_duplicate') or row.get('GÉNERO') != 'Opinión':
+            continue
+        url = str(row.get('URL Nota') or row.get('Web Ext') or '')
+        if not nota_columna_no_opinion(_titulo_fila(row, km), url,
+                                       row.get(sec_col) or row.get('Sección - Programa') or ''):
+            continue
+        row['GÉNERO'] = 'Noticia'
+        if row.get('TIPO') == 'Opinión de terceros':
+            row['TIPO'] = 'Información general'
+        cambios += 1
+    return cambios
+
+
 # Clausifier 2026-11-08: la Sección marca Reportaje solo si ES la sección de
 # reportajes/especiales/crónicas/investigación (palabra completa al inicio
 # o como nombre entero), no si una sección de noticias contiene la palabra.
@@ -9254,7 +9305,11 @@ def enrich_rows_with_ai(
             'flags': [cfg.get(k) for k in ('tono_distrito_positivo', 'tono_alertas_tempranas',
                                            'tono_labor_positiva', 'tono_solo_gestion',
                                            'agrupacion_estricta')],
-            'instrucciones': hashlib.sha1(_mhm.SYSTEM_PROMPT.encode()).hexdigest(),
+            # v1.39: el prompt completo, con el bloque TIPO/GÉNERO (antes
+            # solo el base: un cambio de las reglas de GÉNERO no renovaba la
+            # memoria y una nota seguía heredando su GÉNERO viejo).
+            'instrucciones': hashlib.sha1(_mhm.system_prompt(
+                bool(cfg.get('clasificar_tipo_genero'))).encode()).hexdigest(),
             'analizador': ANALYZER_BUILD})
         _mem = memoria_cliente.cargar(brand, _mem_huella, extra)
         for g in grupos:
@@ -9728,6 +9783,11 @@ def enrich_rows_with_ai(
         _ULTIMO_RESUMEN['subtemas_politicos'] = {k: _pol_fijos[k] for k in ('aspirantes', 'petro')}
     if cfg.get('memoria_subtemas'):
         guardar_subtemas_corrida(rows, km, brand, extra)
+    # v1.39: «columna de humo» no es Opinión (antes de guardar la memoria).
+    if cfg.get('clasificar_tipo_genero'):
+        _col = aplicar_guardia_columna_no_opinion(rows, km)
+        if _col:
+            _ULTIMO_RESUMEN['genero_columna_no_opinion'] = _col
 
     _etapa('Pase final por noticia')
     if haiku:
