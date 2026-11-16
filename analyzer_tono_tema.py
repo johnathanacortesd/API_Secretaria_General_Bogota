@@ -11206,12 +11206,34 @@ _RX_PETRO_ALCALDE = re.compile(
 _RX_PETRO_LEAD = re.compile(
     r'\bpetro\b.{0,60}\b(?:alcaldia|alcalde|exalcalde)\b'
     r'|\b(?:alcaldia|exalcalde|administracion)\s+(?:de\s+)?(?:gustavo\s+)?petro\b')
+# v1.39: su paso por el Distrito sin la palabra «alcalde» en el titular.
+_RX_PETRO_DISTRITO = re.compile(
+    r'\b(?:palacio lievano|exmandatario distrital|mandatario distrital|bogota humana)\b'
+    r'|\b(?:legado|paso|gestion|mandato|administracion|gobierno distrital|herencia|epoca)\b'
+    r'.{0,40}\bpetro\b.{0,25}\b(?:en|por|de)\s+bogota\b'
+    r'|\bpetro\b.{0,40}\b(?:201[2-5])\b|\b(?:201[2-5])\b.{0,40}\bpetro\b')
+# v1.39: la entrada sin «Petro» en el titular: solo la referencia explícita a
+# su época de alcalde («cuando Petro era alcalde», «la alcaldía de Petro»).
+_RX_PETRO_EPOCA = re.compile(
+    r'\bcuando\s+(?:gustavo\s+)?petro\s+(?:era|fue|todavia era|aun era)\s+(?:el\s+)?alcalde\b'
+    r'|\b(?:alcaldia|administracion|mandato|gobierno)\s+(?:distrital\s+)?de\s+'
+    r'(?:gustavo\s+)?petro\b'
+    r'|\b(?:exalcalde|ex alcalde)\s+(?:gustavo\s+)?petro\b'
+    r'|\bpetro\s*,?\s+(?:entonces\s+)?alcalde\s+de\s+bogota\b')
+
+
+# v1.39: tras «alcaldía de» / «alcalde de» estas palabras no son otra ciudad
+# («alcaldía de Gustavo Petro», «alcalde de la ciudad / la capital»).
+_NO_CIUDAD = frozenset({
+    'la', 'el', 'los', 'las', 'ciudad', 'capital', 'distrito', 'gustavo', 'petro', 'carlos',
+    'galan', 'claudia', 'lopez', 'enrique', 'penalosa', 'samuel', 'moreno', 'lucho', 'luis',
+    'antanas', 'mockus', 'garzon', 'clara', 'turno', 'entonces', 'su', 'sus', 'ese', 'esa'})
 
 
 def _alcaldia_de_otra_ciudad(t: str) -> bool:
     """True si el texto nombra «alcaldía de X» y ninguna X es Bogotá."""
     ciudades = [m.group(1) for m in _RX_ALCALDIA_DE.finditer(t)]
-    ciudades = [c for c in ciudades if c not in ('la', 'el', 'los', 'las')]
+    ciudades = [c for c in ciudades if c not in _NO_CIUDAD]
     return bool(ciudades) and not any(c.startswith('bogota') for c in ciudades)
 
 
@@ -11244,17 +11266,24 @@ def es_nota_aspirantes_alcaldia(titulo: str, hecho: str = '', voceros=()) -> boo
     return False
 
 
-def es_nota_petro_alcalde(titulo: str, hecho: str = '') -> bool:
+def es_nota_petro_alcalde(titulo: str, hecho: str = '', voceros=()) -> bool:
     """Nota sobre Gustavo Petro como alcalde (candidato a la Alcaldía,
-    exalcalde, su administración en Bogotá)."""
+    exalcalde, su administración en Bogotá, «cuando Petro era alcalde»)."""
     t = nz(titulo)
+    h = nz(hecho)[:400]
     if not re.search(r'\bpetro\b', t):
-        return False
+        # v1.39: titular sin Petro pero la entrada habla de su época de
+        # alcalde. No si el titular trata de un vocero propio (Galán).
+        if not h or not _RX_PETRO_EPOCA.search(h) or _alcaldia_de_otra_ciudad(h):
+            return False
+        propios = [nz(v) for v in (voceros or [])
+                   if v and str(v)[:1].isupper() and len(nz(v)) >= 4]
+        return not any(re.search(r'\b' + re.escape(p) + r'\b', t) for p in propios)
     if _alcaldia_de_otra_ciudad(t):
         return False
-    if _RX_PETRO_ALCALDE.search(t):
+    if _RX_PETRO_ALCALDE.search(t) or _RX_PETRO_DISTRITO.search(t):
         return True
-    return bool(_RX_PETRO_LEAD.search(nz(hecho)[:400]))
+    return bool(_RX_PETRO_LEAD.search(h))
 
 
 def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict],
@@ -11276,7 +11305,7 @@ def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict
         tit = _titulo_fila(row, km)
         hecho = _texto_fila(row, km)[:400]
         rotulo = ''
-        if sub_pet and es_nota_petro_alcalde(tit, hecho):
+        if sub_pet and es_nota_petro_alcalde(tit, hecho, voceros=voceros):
             rotulo, clave_r = sub_pet, 'petro'
         elif sub_asp and es_nota_aspirantes_alcaldia(tit, hecho, voceros=voceros):
             rotulo, clave_r = sub_asp, 'aspirantes'
@@ -11286,6 +11315,9 @@ def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict
         row['Tono_IA'] = 'Neutro'
         if con_tipo:
             row['TIPO'] = 'Información general'
+        # v1.39: marca para que las reglas de GÉNERO/TIPO posteriores
+        # (opinión por URL/Sección) no cambien el TIPO.
+        row['_subtema_politico'] = clave_r
         out['filas'].append(i)
         out[clave_r] += 1
     return out
