@@ -10217,6 +10217,10 @@ def aplicar_regla_positivo_incidental(grupos: Sequence[dict], etiquetas: Dict[in
         # sea una sola mención (criterio del usuario).
         if _marca_sujeto_de_gestion(texto, actores):
             continue
+        # v1.40: avance o entrega de una obra del Distrito (IDU, Metro…).
+        if solo_gestion and not titulo_adverso_sin_gestion(titulo) \
+                and _obra_distrital_avanza(titulo, g.get('contexto') or g.get('texto') or ''):
+            continue
         # ¿La guarda positiva encontraría evidencia real sobre la marca en
         # este contenido? Se prueba sobre una copia en Neutro para reutilizar
         # toda su lógica (fuente experta, sede, participación, autoría...).
@@ -10420,6 +10424,44 @@ def _entidad_distrital_gestiona(texto: str) -> bool:
     return False
 
 
+# v1.40 (regla del usuario 2026-11-16): avance o entrega de una obra o
+# servicio público reportado por una entidad del Distrito es Positivo,
+# aunque la entidad solo aparezca como fuente del dato («Según el reporte
+# del IDU, la obra ya registra un avance superior al 87 %»). Caso real:
+# izaje del puente peatonal de la avenida Boyacá con calle 86A.
+_OBRA_DISTRITO_CACHE = []
+_OBRA_PAT = re.compile(
+    r'\b(?:obras?|puentes?|ciclopeatonal|peatonal|ciclorrutas?|cicloruta|troncal(?:es)?|'
+    r'estacion(?:es)?|patio|portal|via(?:s|l|les)?|avenida|corredor(?:es)?|intercambiador|'
+    r'deprimido|colegios?|hospital|parques?|jardin(?:es)?|biblioteca|sede|centro\s+de\s+\w+|'
+    r'malla\s+vial|anden(?:es)?|alameda|metro|regiotram|cable|infraestructura|'
+    r'tramo|viaducto|izaje|vigas?|dovelas?)\b')
+_AVANCE_PAT = re.compile(
+    r'\bavance\s+(?:general\s+|de\s+obra\s+|fisico\s+|de\s+ejecucion\s+)?(?:del?\s+|superior\s+al?\s+|'
+    r'de\s+mas\s+del?\s+|cercano\s+al?\s+)?\d'
+    r'|\b\d+(?:[.,]\d+)?\s*(?:%|por\s+ciento)\s+de\s+avance'
+    r'|\b(?:finaliz|culmin|termin|conclu|complet)\w*\s+(?:con\s+exito|exitosamente|el\s+izaje|la\s+obra|'
+    r'la\s+construccion|los\s+trabajos)'
+    r'|\b(?:izaje|montaje)\b.{0,80}\b(?:finaliz|culmin|termin|conclu|complet)\w*'
+    r'|\b(?:entr\w+\s+en\s+operacion|entr\w+\s+en\s+funcionamiento|abr\w+\s+al\s+publico|'
+    r'(?:fue|ya\s+esta|quedo)\s+(?:entregad|inaugurad|habilitad|abiert)\w*)'
+    r'|\bbeneficiar\w*\s+(?:directamente\s+)?a\s+(?:mas\s+de\s+)?\d')
+
+
+def _obra_distrital_avanza(titulo: str, texto: str) -> bool:
+    """True si una entidad del Distrito figura en la nota (titular o
+    contexto, aunque sea como fuente) y la nota reporta el avance, la
+    terminación o la entrega de una obra o servicio público."""
+    if not _OBRA_DISTRITO_CACHE:
+        import contexto_cliente as _cc
+        ent = '|'.join(p for cat, _et, p in _cc._PATRONES_DISTRITO if cat == 'adscrita')
+        _OBRA_DISTRITO_CACHE.append(re.compile(r'\b(?:%s)' % ent))
+    tt = nz('%s. %s' % (titulo or '', texto or ''))
+    if not _OBRA_DISTRITO_CACHE[0].search(tt):
+        return False
+    return bool(_OBRA_PAT.search(tt) and _AVANCE_PAT.search(tt))
+
+
 # Titular con «Bogotá» o el Distrito como sujeto de una gestión («Bogotá
 # nombra nueva líder social», «Bogotá abre convocatoria», «Bogotá invita a
 # prevenir…»): Positivo en las notas etiquetadas a mano.
@@ -10466,6 +10508,7 @@ def aplicar_regla_secretarias_distritales(grupos, etiquetas, brand, aliases, voc
         actores = [nz(x) for x in [brand] + list(aliases or []) + list(voceros or [])
                    if x and len(nz(x)) >= 4]
         if (_entidad_distrital_gestiona(texto)
+                or _obra_distrital_avanza(titulo, g.get('contexto') or g.get('texto') or '')
                 or _marca_sujeto_de_gestion(texto, actores)
                 or _titular_distrito_gestiona(titulo)):
             e['tono'] = 'Positivo'
