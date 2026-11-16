@@ -994,7 +994,9 @@ def aplicar_opinion_haiku(rows, brand="", aliases=(), voceros=()) -> int:
             continue
         antes = (row.get('GÉNERO'), row.get('TIPO'))
         row['GÉNERO'] = nuevo
-        if nuevo == 'Opinión' and row.get('TIPO') != 'Ranking':
+        # v1.39: aspirantes / Petro como alcalde conservan TIPO Información general.
+        if nuevo == 'Opinión' and row.get('TIPO') != 'Ranking' \
+                and not row.get('_subtema_politico'):
             autor = _norm_simple(row.get('Autor - Conductor'))
             if not any(p in autor for p in propios):
                 row['TIPO'] = 'Opinión de terceros'
