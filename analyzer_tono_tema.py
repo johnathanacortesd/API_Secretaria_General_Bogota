@@ -4060,7 +4060,8 @@ def aplicar_fidelidad_final_subtema(rows, mapa, etiquetas, ajustes_subtema,
         # gid=0 es un id válido (el motor real numera desde 1, pero no se
         # asume): solo None significa "sin grupo". El `if gid` de la guarda
         # original lo trataría como ausente y saltaría la fila.
-        e = etiquetas.get(gid) if gid is not None else {}
+        # v1.42: un grupo sin etiqueta no tumba la corrida.
+        e = (etiquetas.get(gid) if gid is not None else None) or {}
         if i in ajustes and nz(ajustes[i]):
             sub = ajustes[i]
         else:
@@ -8077,7 +8078,12 @@ def reparar_copias_finales(cfg: dict, grupos: Sequence[dict],
             if not _resp_malo and _haiku_mode:
                 _resp_malo = bool(_forma_haiku(_resp, _f['titulo'],
                                                (grupo_por_id.get(_gid) or {}).get('contexto_marca') or ''))
-            etiquetas[_gid]['sub_tema'] = _f['sub_tema'] if _resp_malo else _resp
+            if _resp_malo:
+                # v1.42: se conserva el original, pero nunca con el nombre
+                # del medio pegado («… - CAMBIO COLOMBIA»).
+                _resp = _quitar_sufijo_medio(
+                    _f['sub_tema'], list(medios_grupo.get(_gid, set()))) or _f['sub_tema']
+            etiquetas[_gid]['sub_tema'] = _resp
             sin_reparar += 1
     for _f in fallos_fila:
         _i = _f['_fila']
