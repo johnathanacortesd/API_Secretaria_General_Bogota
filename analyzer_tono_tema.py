@@ -9246,6 +9246,8 @@ def enrich_rows_with_ai(
     _ULTIMO_RESUMEN.pop('memoria', None)
     _ULTIMO_RESUMEN.pop('subtemas_politicos', None)
     _ULTIMO_RESUMEN.pop('tono_gestion_vocero', None)
+    _ULTIMO_RESUMEN.pop('tono_reclamo_sin_respuesta_filas', None)
+    _ULTIMO_RESUMEN.pop('tono_reclamo_sin_respuesta', None)
     _ULTIMO_RESUMEN.pop('correcciones_sheets_leidas', None)
     _ULTIMO_RESUMEN.pop('subtemas_de_corridas_previas', None)
     _ULTIMO_RESUMEN.pop('para_revisar', None)
@@ -9620,6 +9622,12 @@ def enrich_rows_with_ai(
             voceros=cfg.get('voceros') or [])
     if _distrito:
         _ULTIMO_RESUMEN['tono_distrito'] = _distrito
+    # v1.43: reclamo dirigido al cliente sin su respuesta => Negativo.
+    if cfg.get('tono_solo_gestion') and tone_model is None:
+        _reclamos = aplicar_regla_reclamo_sin_respuesta(
+            grupos, etiquetas, brand, aliases, voceros=cfg.get('voceros') or [])
+        if _reclamos:
+            _ULTIMO_RESUMEN['tono_reclamo_sin_respuesta'] = _reclamos
 
     # v1.24/v1.28 (2026-11-02): homónimo extranjero (ver
     # aplicar_regla_homonimo_extranjero). Corre después de Jev y junto
@@ -9738,6 +9746,11 @@ def enrich_rows_with_ai(
     # v1.41: el alcalde o un vocero reivindica una gestión concreta =>
     # Positivo (perfil del Distrito). Antes de los subtemas políticos, que
     # siguen mandando (Petro como alcalde = Neutro).
+    if cfg.get('tono_solo_gestion') and tone_model is None:
+        _rc = aplicar_reclamo_sin_respuesta_final(rows, km, brand, aliases,
+                                                  voceros=cfg.get('voceros') or [], mapa=mapa)
+        if _rc:
+            _ULTIMO_RESUMEN['tono_reclamo_sin_respuesta_filas'] = len(_rc)
     if cfg.get('tono_distrito_positivo') and tone_model is None:
         _gv = aplicar_gestion_vocero_final(rows, km, brand, aliases,
                                            voceros=cfg.get('voceros') or [], mapa=mapa)
@@ -11168,7 +11181,9 @@ _CRITICA_DECRETO_STEMS = (
 _DISTRITO_VERBO_STEMS = (
     'entreg', 'inaugur', 'constru', 'lanz', 'impuls', 'aprob', 'destin',
     'invert', 'dona', 'dono', 'respald', 'apoy', 'capacit', 'organiz', 'convoc',
-    'celebr', 'realiz', 'present', 'anunci', 'public', 'socializ',
+    # v1.43: sin 'public': casaba «publicación», «espacio público»,
+    # «transporte público» y volvía Positivas notas adversas.
+    'celebr', 'realiz', 'present', 'anunci', 'socializ',
     'recib', 'ocup', 'firm', 'atend', 'habilit',
     'acompan', 'facilit',
 )
@@ -11195,6 +11210,125 @@ def _hecho_bueno_distrito(nt: str) -> bool:
     if re.search(r'\b(?:' + '|'.join(_DISTRITO_VERBO_STEMS + _DISTRITO_BENEFICIO_SUST) + r')\w*', nt):
         return True
     return False
+
+
+# ============================================================================
+# v1.43 (regla del usuario 2026-11-21): un tercero (periodista, concejal,
+# comunidad…) le reclama, exige o pide explicaciones al alcalde o a la
+# Alcaldía por un problema, y la nota no trae respuesta de la Alcaldía =>
+# Negativo. Caso real: «Hollman Morris pidió explicaciones al alcalde
+# Galán y al GEB por un corte de electricidad… no se incluyó una respuesta
+# oficial de la Alcaldía» salía Positivo. Si la Alcaldía responde, la regla
+# no aplica (crítica con respuesta = Neutro, por las reglas de siempre).
+# ============================================================================
+_RECLAMO_VERBO_PAT = re.compile(
+    r'\b(?:le\s+)?(?:pide|pidio|piden|pidieron|exige|exigio|exigen|exigieron|reclama|reclamo|'
+    r'reclaman|reclamaron|cuestiona|cuestiono|cuestionan|cuestionaron|critica|critico|critican|'
+    r'criticaron|denuncia|denuncio|denuncian|denunciaron|increpa|increpo|arremete|arremetio|'
+    r'responsabiliza|responsabilizo|culpa|culpo|solicita|solicito|emplaza|emplazo)\b')
+_RECLAMO_OBJETO_PAT = re.compile(
+    r'\b(?:explicaciones|respuestas?|cuentas|soluciones|solucion|restablecimiento|corte|cortes|'
+    r'apagon|apagones|interrupcion|falla|fallas|retraso|retrasos|demora|demoras|inseguridad|'
+    r'hurtos?|abandono|basuras|huecos|caos|crisis|incumplimiento|incumplimientos|sin servicio|'
+    r'sin luz|sin agua|sin energia|desabastecimiento|emergencia|afectacion|afectaciones)\b')
+_SIN_RESPUESTA_PAT = re.compile(
+    r'\b(?:no se incluyo|no incluyo|no se conoce|no se ha conocido|sin)\s+(?:una\s+)?respuesta'
+    r'|\bno\s+(?:ha|han|habia|habian)\s+(?:respondido|dado respuesta|habido respuesta)'
+    r'|\bno\s+(?:se\s+)?(?:ha|han)?\s*(?:pronunciado|pronuncio|pronunciaron|respondio|respondieron)\b'
+    r'|\bno\s+hubo\s+respuesta|\bguarda(?:n|ba|ban)?\s+silencio')
+_VOZ_CLIENTE_PAT = re.compile(
+    r'\b(?:respondio|respondieron|explico|explicaron|aseguro|aseguraron|senalo|senalaron|indico|'
+    r'indicaron|afirmo|afirmaron|anuncio|anunciaron|informo|informaron|aclaro|aclararon|dijo|'
+    r'dijeron|manifesto|preciso|sostuvo|reconocio|admitio|se pronuncio|replico|'
+    # presente: «Galán reconoce…», «la Alcaldía explica…»
+    r'responde|responden|explica|explican|asegura|aseguran|senala|indica|afirma|anuncia|'
+    r'informa|aclara|dice|reconoce|reconocen|admite|replica|defiende|se pronuncia)\b')
+
+
+def _reclamo_sin_respuesta(titulo: str, texto: str, actores: Sequence[str]) -> bool:
+    """True si un tercero le reclama al cliente por un problema y la nota
+    no trae la voz del cliente (o dice explícitamente que no respondió)."""
+    # Homónimos, otros alcaldes y cargos pasados no son el cliente
+    # («Juan Manuel Galán… no se pronunció»).
+    crudo = _enmascarar_menciones_ajenas('%s. %s' % (titulo or '', texto or ''), actores)
+    t = nz(crudo)
+    acts = [a for a in (nz(x) for x in (actores or [])) if len(a) >= 4
+            and a not in ('el alcalde', 'la alcaldia', 'alcalde')]
+    genericos = ['al alcalde', 'el alcalde', 'la alcaldia', 'alcalde mayor', 'el distrito']
+    reclamo = False
+    for m in _RECLAMO_VERBO_PAT.finditer(t):
+        ventana = t[m.start():m.end() + 140]
+        cand = acts if _alcaldia_de_otra_ciudad(ventana) else acts + genericos
+        if not any(re.search(r'\b' + re.escape(a) + r'\b', ventana) for a in cand):
+            continue
+        if _RECLAMO_OBJETO_PAT.search(t[max(0, m.start() - 60):m.end() + 220]):
+            reclamo = True
+            break
+    if not reclamo:
+        return False
+    # «No se incluyó una respuesta oficial de la Alcaldía»: solo cuenta si
+    # el silencio es del cliente (no el de otro actor de la nota).
+    # Se mira por oración: el sujeto del silencio está en la misma oración.
+    for oracion in re.split(r'(?<=[.!?;])\s+|\n+', str(crudo)):
+        o = nz(oracion)
+        if _SIN_RESPUESTA_PAT.search(o) and \
+                any(re.search(r'\b' + re.escape(a) + r'\b', o) for a in acts + genericos):
+            return True
+    # Si la nota también cuenta una gestión del cliente («inauguró el
+    # parque, pero vecinos cuestionaron…»), es información mixta: la
+    # deciden las reglas de siempre (hecho bueno + crítica = Neutro).
+    if _marca_sujeto_de_gestion(t, acts + ['el alcalde', 'la alcaldia', 'el distrito']):
+        return False
+    # ¿La nota trae la voz del cliente (respondió, explicó, aseguró…)?
+    for a in acts + ['el alcalde', 'la alcaldia', 'el distrito', 'la secretaria']:
+        for ma in re.finditer(r'\b' + re.escape(a) + r'\b', t):
+            if _VOZ_CLIENTE_PAT.search(t[max(0, ma.start() - 60):ma.end() + 60]):
+                return False
+    return True
+
+
+def aplicar_regla_reclamo_sin_respuesta(grupos, etiquetas, brand, aliases, voceros=()):
+    """v1.43: reclamo dirigido al cliente sin su respuesta => Negativo (ver
+    _reclamo_sin_respuesta). Devuelve los grupos corregidos."""
+    actores = [x for x in [brand] + list(aliases or []) + list(voceros or []) if x]
+    corregidos = []
+    for g in grupos:
+        e = etiquetas.get(g.get('grupo'))
+        if not e or e.get('tono') == 'Negativo':
+            continue
+        if e.get('tipo') == 'Opinión de terceros' and e.get('genero') in ('Opinión', 'Editorial'):
+            continue
+        if _reclamo_sin_respuesta(g.get('titulo') or '',
+                                  g.get('contexto') or g.get('texto') or '', actores):
+            e['tono'] = 'Negativo'
+            e.setdefault('flags', {})['negativo_reclamo'] = True
+            corregidos.append(g.get('grupo'))
+    return corregidos
+
+
+def aplicar_reclamo_sin_respuesta_final(rows: List[dict], km: dict, brand: str, aliases=(),
+                                        voceros=(), mapa: Optional[dict] = None) -> List[int]:
+    """v1.43: lo mismo sobre las filas ya volcadas (pasa por encima del voto
+    por subtema). No toca correcciones manuales ni notas políticas. Con
+    `mapa`, todas las filas del mismo grupo quedan con el mismo tono."""
+    actores = [x for x in [brand] + list(aliases or []) + list(voceros or []) if x]
+    baja = []
+    for i, row in enumerate(rows):
+        if row.get('is_duplicate') or row.get('_subtema_politico') or row.get('_correccion_manual'):
+            continue
+        if str(row.get('Tono_IA') or '') in ('Negativo', '', 'Duplicada'):
+            continue
+        if _reclamo_sin_respuesta(_titulo_fila(row, km), _texto_fila(row, km), actores):
+            baja.append(i)
+    if mapa and baja:
+        grupos_ok = {mapa.get(i) for i in baja if mapa.get(i) is not None}
+        baja += [i for i, row in enumerate(rows)
+                 if mapa.get(i) in grupos_ok and i not in baja and not row.get('is_duplicate')
+                 and not row.get('_subtema_politico') and not row.get('_correccion_manual')
+                 and str(row.get('Tono_IA') or '') in ('Positivo', 'Neutro')]
+    for i in baja:
+        rows[i]['Tono_IA'] = 'Negativo'
+    return sorted(baja)
 
 
 def _decreto_de_alcaldia(texto: str, actores) -> bool:
@@ -11247,6 +11381,9 @@ def aplicar_regla_distrito(grupos, etiquetas, brand, aliases, voceros=()):
         completo = '%s. %s' % (titulo, texto)
         nt = nz(completo)
         if not _hecho_bueno_distrito(nt):
+            continue
+        # v1.43: un reclamo dirigido al cliente sin su respuesta no sube.
+        if _reclamo_sin_respuesta(titulo, texto, [brand] + list(aliases or []) + list(voceros or [])):
             continue
         # 2026-11-14: «obra», «proyecto» o «programa» en una nota cuyo
         # titular es adverso no es un hecho bueno (caso «Galán reconoce
