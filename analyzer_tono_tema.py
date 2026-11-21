@@ -11250,7 +11250,8 @@ def _reclamo_sin_respuesta(titulo: str, texto: str, actores: Sequence[str]) -> b
     no trae la voz del cliente (o dice explícitamente que no respondió)."""
     # Homónimos, otros alcaldes y cargos pasados no son el cliente
     # («Juan Manuel Galán… no se pronunció»).
-    t = nz(_enmascarar_menciones_ajenas('%s. %s' % (titulo or '', texto or ''), actores))
+    crudo = _enmascarar_menciones_ajenas('%s. %s' % (titulo or '', texto or ''), actores)
+    t = nz(crudo)
     acts = [a for a in (nz(x) for x in (actores or [])) if len(a) >= 4
             and a not in ('el alcalde', 'la alcaldia', 'alcalde')]
     genericos = ['al alcalde', 'el alcalde', 'la alcaldia', 'alcalde mayor', 'el distrito']
@@ -11267,9 +11268,11 @@ def _reclamo_sin_respuesta(titulo: str, texto: str, actores: Sequence[str]) -> b
         return False
     # «No se incluyó una respuesta oficial de la Alcaldía»: solo cuenta si
     # el silencio es del cliente (no el de otro actor de la nota).
-    for ms in _SIN_RESPUESTA_PAT.finditer(t):
-        cerca = t[max(0, ms.start() - 80):ms.end() + 120]
-        if any(re.search(r'\b' + re.escape(a) + r'\b', cerca) for a in acts + genericos):
+    # Se mira por oración: el sujeto del silencio está en la misma oración.
+    for oracion in re.split(r'(?<=[.!?;])\s+|\n+', str(crudo)):
+        o = nz(oracion)
+        if _SIN_RESPUESTA_PAT.search(o) and \
+                any(re.search(r'\b' + re.escape(a) + r'\b', o) for a in acts + genericos):
             return True
     # Si la nota también cuenta una gestión del cliente («inauguró el
     # parque, pero vecinos cuestionaron…»), es información mixta: la
