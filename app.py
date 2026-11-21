@@ -8,8 +8,51 @@ import logging
 import os
 import re
 import time
+import sys
 import streamlit as st
 import pandas as pd
+
+
+def _modulos_del_proyecto_al_dia() -> None:
+    """v1.43: tras publicar una versión nueva, Streamlit Cloud puede volver a
+    correr app.py con los módulos del proyecto de la versión anterior aún en
+    memoria (pipeline, analyzer_tono_tema, memoria_cliente…), y un nombre
+    nuevo da ImportError («cannot import name 'cargar_hoja_analizadas'»).
+    Si algún .py del proyecto cambió en disco después de cargarse, se sacan
+    de memoria TODOS los módulos del proyecto para que se importen de nuevo
+    juntos, en la misma versión. Si nada cambió no hace nada."""
+    base = os.path.dirname(os.path.abspath(__file__))
+    try:
+        huella = tuple(sorted((f, os.path.getmtime(os.path.join(base, f)))
+                              for f in os.listdir(base) if f.endswith(".py")))
+    except OSError:
+        return
+    previa = getattr(sys, "_sgb_huella_modulos", None)
+    sys._sgb_huella_modulos = huella
+    if previa == huella:
+        return
+    propios = [n for n, m in list(sys.modules.items())
+               if n not in ("__main__", __name__)
+               and getattr(m, "__file__", None)
+               and os.path.abspath(m.__file__) != os.path.abspath(__file__)
+               and os.path.dirname(os.path.abspath(m.__file__)) == base]
+    if not propios:
+        return
+    if previa is None:
+        # Primera corrida de este código en el proceso: solo hay módulos
+        # viejos si algún archivo se modificó después de que el proceso
+        # arrancó (la actualización llegó con la app corriendo).
+        try:
+            inicio = os.stat("/proc/self").st_ctime
+        except OSError:
+            return
+        if not any(mt > inicio for _f, mt in huella):
+            return
+    for n in propios:
+        sys.modules.pop(n, None)
+
+
+_modulos_del_proyecto_al_dia()
 
 from catalogo_tono_tema import CRITERIOS_TONO
 from perfil_cliente import cargar_perfil, guardar_perfil, listar_perfiles, perfil_a_resumen, slugify
@@ -19,7 +62,7 @@ from pipeline import (process_dossier, leer_columnas_xlsx, sugerir_columna,
                       cargar_ids_analizados_desde_sheets, cargar_hoja_analizadas)
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.42"
+APP_VERSION = "v1.43"
 
 
 def _historial_dir_secreto():
