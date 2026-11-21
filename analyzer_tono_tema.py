@@ -9245,6 +9245,8 @@ def enrich_rows_with_ai(
     _mem_huella = ''
     _ULTIMO_RESUMEN.pop('memoria', None)
     _ULTIMO_RESUMEN.pop('subtemas_politicos', None)
+    _ULTIMO_RESUMEN.pop('tono_gestion_vocero', None)
+    _ULTIMO_RESUMEN.pop('correcciones_sheets_leidas', None)
     _ULTIMO_RESUMEN.pop('subtemas_de_corridas_previas', None)
     _ULTIMO_RESUMEN.pop('para_revisar', None)
     if haiku and cfg.get('memoria'):
@@ -9723,8 +9725,24 @@ def enrich_rows_with_ai(
     # noticia igual o muy parecida a una ya vista conserva su subtema.
     if cfg.get('memoria_subtemas'):
         import memoria_cliente
-        _ancl = anclar_subtemas_previos(rows, km, memoria_cliente.cargar_subtemas(brand, extra))
+        _entr = memoria_cliente.cargar_subtemas(brand, extra)
+        # v1.42: correcciones del analista en la hoja de Google Sheets del
+        # boletín (tono y subtema de las notas ya publicadas).
+        _corr = (extra or {}).get('correcciones_sheets')
+        _corr = _corr if isinstance(_corr, list) else []
+        if _corr:
+            _entr = memoria_cliente.fusionar_correcciones(_entr, _corr)
+            _ULTIMO_RESUMEN['correcciones_sheets_leidas'] = len(_corr)
+        _ancl = anclar_subtemas_previos(rows, km, _entr, mapa=mapa)
         _ULTIMO_RESUMEN['subtemas_de_corridas_previas'] = _ancl
+    # v1.41: el alcalde o un vocero reivindica una gestión concreta =>
+    # Positivo (perfil del Distrito). Antes de los subtemas políticos, que
+    # siguen mandando (Petro como alcalde = Neutro).
+    if cfg.get('tono_distrito_positivo') and tone_model is None:
+        _gv = aplicar_gestion_vocero_final(rows, km, brand, aliases,
+                                           voceros=cfg.get('voceros') or [], mapa=mapa)
+        if _gv:
+            _ULTIMO_RESUMEN['tono_gestion_vocero'] = len(_gv)
     # v1.37: subtemas políticos fijos del perfil (aspirantes a la Alcaldía,
     # Petro como alcalde): mandan sobre todo lo anterior, memoria incluida.
     _pol_fijos = aplicar_subtemas_politicos(
@@ -10227,6 +10245,11 @@ def aplicar_regla_positivo_incidental(grupos: Sequence[dict], etiquetas: Dict[in
         if solo_gestion and not titulo_adverso_sin_gestion(titulo) \
                 and _obra_distrital_avanza(titulo, g.get('contexto') or g.get('texto') or ''):
             continue
+        # v1.41: el alcalde o un vocero reivindica una gestión concreta.
+        if solo_gestion and _vocero_reivindica_gestion(
+                titulo, g.get('contexto') or g.get('texto') or '',
+                [brand] + list(aliases or []) + list(voceros or [])):
+            continue
         # ¿La guarda positiva encontraría evidencia real sobre la marca en
         # este contenido? Se prueba sobre una copia en Neutro para reutilizar
         # toda su lógica (fuente experta, sede, participación, autoría...).
@@ -10468,6 +10491,93 @@ def _obra_distrital_avanza(titulo: str, texto: str) -> bool:
     return bool(_OBRA_PAT.search(tt) and _AVANCE_PAT.search(tt))
 
 
+# v1.41 (regla del usuario 2026-11-21): el alcalde (o un vocero propio)
+# reivindica una gestión concreta sobre una obra, proyecto o programa, en
+# primera persona («logramos destrabar…», «hoy presentamos las obras que
+# permitirán ampliar la autopista Norte», «señaló Galán») o en estilo
+# indirecto («el alcalde destacó haber destrabado el proyecto») = Positivo,
+# aunque comparta el crédito con otro (el presidente) o no use un verbo de
+# gestión clásico. Caso real: ampliación de la autopista Norte.
+_GESTION_1P_PAT = re.compile(
+    r'\b(?:logramos|destrabamos|entregamos|inauguramos|construimos|terminamos|culminamos|'
+    r'iniciamos|arrancamos|presentamos|firmamos|adjudicamos|contratamos|invertimos|ampliamos|'
+    r'recuperamos|habilitamos|abrimos|pusimos en marcha|sacamos adelante|cumplimos|'
+    r'hemos (?:logrado|entregado|construido|destrabado|avanzado|invertido|terminado|cumplido|'
+    r'inaugurado|iniciado|recuperado|habilitado|ampliado))\b')
+_GESTION_IND_PAT = re.compile(
+    r'\b(?:destac\w*|resalt\w*|celebr\w*|subray\w*|reivindic\w*|anunci\w*|present\w*)\s+'
+    r'(?:\w+\s+){0,5}?(?:haber\s+)?(?:destrab|logr|entreg|constru|inici|arranc|culmin|termin|'
+    r'inaugur|habilit|ampli|adjudic|contrat|recuper)\w*')
+_GESTION_OBJETO_PAT = re.compile(
+    r'\b(?:obras?|proyectos?|programas?|autopista|avenida|troncal|puentes?|via|vias|metro|'
+    r'regiotram|colegios?|hospital|parques?|carriles|corredor|estacion|portal|infraestructura|'
+    r'viviendas?|cable|ciclorruta|malla vial|sede|jardin(?:es)?|biblioteca)\b')
+
+
+def _vocero_reivindica_gestion(titulo: str, texto: str, actores: Sequence[str]) -> bool:
+    """True si un actor propio (alcalde, Alcaldía, voceros) reivindica una
+    gestión concreta sobre una obra o proyecto (ver _GESTION_1P_PAT). El
+    actor debe estar a menos de ~300 caracteres de la frase de gestión
+    (la cita va seguida de «señaló Galán»). No con titular adverso."""
+    if titulo_adverso_sin_gestion(titulo or ''):
+        return False
+    t = nz('%s. %s' % (titulo or '', texto or ''))
+    acts = [a for a in (nz(x) for x in (actores or [])) if len(a) >= 4
+            and a not in ('el alcalde', 'la alcaldia', 'alcalde')]
+    genericos = ['el alcalde', 'alcalde mayor', 'la alcaldia']
+    for rx in (_GESTION_1P_PAT, _GESTION_IND_PAT):
+        for m in rx.finditer(t):
+            ventana = t[max(0, m.start() - 300):m.end() + 300]
+            if not _GESTION_OBJETO_PAT.search(ventana):
+                continue
+            # «el alcalde» genérico no cuenta si la ventana es de otra ciudad.
+            cand = acts if _alcaldia_de_otra_ciudad(ventana) else acts + genericos
+            if any(re.search(r'\b' + re.escape(a) + r'\b', ventana) for a in cand):
+                return True
+    return False
+
+
+def aplicar_gestion_vocero_final(rows: List[dict], km: dict, brand: str, aliases=(),
+                                 voceros=(), mapa: Optional[dict] = None) -> List[int]:
+    """v1.41: pase FINAL sobre las filas volcadas (perfil del Distrito). Una
+    nota Neutro en que el alcalde o un vocero reivindica una gestión
+    concreta (ver _vocero_reivindica_gestion) pasa a Positivo, por encima de
+    los Neutros pegajosos y del voto por subtema. No toca: notas políticas
+    (Petro, aspirantes), opinión, medidas restrictivas, notas protocolarias
+    ni notas con crítica dirigida al cliente. Si `mapa` (fila -> grupo) se
+    da, todas las filas del mismo grupo quedan con el mismo tono."""
+    actores = [x for x in [brand] + list(aliases or []) + list(voceros or []) if x]
+    blancos = _con_voceros(aliases, voceros)
+    sube = []
+    for i, row in enumerate(rows):
+        if row.get('is_duplicate') or row.get('_subtema_politico') or row.get('_tono_manual'):
+            continue
+        if str(row.get('Tono_IA') or '') != 'Neutro':
+            continue
+        if str(row.get('TIPO') or '') == 'Opinión de terceros' \
+                or str(row.get('GÉNERO') or '') in ('Opinión', 'Editorial', 'Columna'):
+            continue
+        tit = _titulo_fila(row, km)
+        txt = _texto_fila(row, km)
+        if _MEDIDA_RESTRICTIVA_PAT.search(tit) or _NOTICIA_PROTOCOLO_PAT.search('%s. %s' % (tit, txt)):
+            continue
+        if not _vocero_reivindica_gestion(tit, txt, actores):
+            continue
+        if _marca_blanco_de_critica('%s. %s' % (tit, txt), brand, blancos):
+            continue
+        sube.append(i)
+    if mapa and sube:
+        grupos_ok = {mapa.get(i) for i in sube if mapa.get(i) is not None}
+        extra = [i for i, row in enumerate(rows)
+                 if mapa.get(i) in grupos_ok and i not in sube and not row.get('is_duplicate')
+                 and not row.get('_subtema_politico') and not row.get('_tono_manual')
+                 and str(row.get('Tono_IA') or '') == 'Neutro']
+        sube += extra
+    for i in sube:
+        rows[i]['Tono_IA'] = 'Positivo'
+    return sorted(sube)
+
+
 # Titular con «Bogotá» o el Distrito como sujeto de una gestión («Bogotá
 # nombra nueva líder social», «Bogotá abre convocatoria», «Bogotá invita a
 # prevenir…»): Positivo en las notas etiquetadas a mano.
@@ -10516,6 +10626,8 @@ def aplicar_regla_secretarias_distritales(grupos, etiquetas, brand, aliases, voc
         if (_entidad_distrital_gestiona(texto)
                 or _obra_distrital_avanza(titulo, g.get('contexto') or g.get('texto') or '')
                 or _marca_sujeto_de_gestion(texto, actores)
+                or _vocero_reivindica_gestion(titulo, g.get('contexto') or g.get('texto') or '',
+                                              [brand] + list(aliases or []) + list(voceros or []))
                 or _titular_distrito_gestiona(titulo)):
             e['tono'] = 'Positivo'
             corregidos.append(g.get('grupo'))
@@ -11263,12 +11375,28 @@ _RX_PETRO_DISTRITO = re.compile(
     r'|\bpetro\b.{0,40}\b(?:201[2-5])\b|\b(?:201[2-5])\b.{0,40}\bpetro\b')
 # v1.39: la entrada sin «Petro» en el titular: solo la referencia explícita a
 # su época de alcalde («cuando Petro era alcalde», «la alcaldía de Petro»).
+_PETRO_NOMBRE = (r'(?:(?:el|la)\s+)?(?:(?:hoy|ahora|actual)\s+)?'
+                 r'(?:(?:ex\s?presidente|exmandatario|ex mandatario|presidente|mandatario|senador)\s+)?'
+                 r'(?:gustavo\s+(?:francisco\s+)?)?petro(?:\s+urrego)?')
 _RX_PETRO_EPOCA = re.compile(
-    r'\bcuando\s+(?:gustavo\s+)?petro\s+(?:era|fue|todavia era|aun era)\s+(?:el\s+)?alcalde\b'
-    r'|\b(?:alcaldia|administracion|mandato|gobierno)\s+(?:distrital\s+)?de\s+'
-    r'(?:gustavo\s+)?petro\b'
-    r'|\b(?:exalcalde|ex alcalde)\s+(?:gustavo\s+)?petro\b'
-    r'|\bpetro\s*,?\s+(?:entonces\s+)?alcalde\s+de\s+bogota\b')
+    # «cuando (el expresidente) Petro era alcalde»
+    r'\b(?:cuando|mientras|siendo)\s+' + _PETRO_NOMBRE +
+    r'\s+(?:era|fue|todavia era|aun era|ejercia como|se desempenaba como)\s+(?:el\s+)?alcalde\b'
+    # «Petro, cuando era alcalde» / «Petro, quien fue alcalde de Bogotá»
+    r'|\bpetro\b(?:\s+\w+){0,8}?\s+(?:cuando|mientras|siendo|quien|que)\s+'
+    r'(?:era|fue|todavia era|aun era|ejercia como|ejercio como|se desempeno como|se desempenaba como)?\s*'
+    r'(?:el\s+)?alcalde\b'
+    r'|\bpetro\b(?:\s+\w+){0,8}?\s+(?:en|durante)\s+su\s+(?:alcaldia|paso por la alcaldia|'
+    r'administracion distrital|mandato distrital|gobierno distrital)\b'
+    r'|\bpetro\b(?:\s+\w+){0,8}?\s+como\s+alcalde\b|\bcomo\s+alcalde\s+' + _PETRO_NOMBRE + r'\b'
+    # «la alcaldía (del hoy expresidente) Petro», «la administración distrital de Petro»
+    r'|\balcaldia\s+(?:de\s+|del\s+)?' + _PETRO_NOMBRE + r'\b'
+    r'|\b(?:administracion|mandato|gobierno|gestion)\s+distrital\s+(?:de\s+|del\s+)?' + _PETRO_NOMBRE + r'\b'
+    r'|\b(?:administracion|mandato|gobierno|gestion)\s+(?:de\s+|del\s+)?' + _PETRO_NOMBRE +
+    r'\s+(?:en|por)\s+(?:bogota|la alcaldia|el distrito|la ciudad)\b'
+    r'|\b(?:exalcalde|ex alcalde)\s+(?:de bogota\s+)?(?:y\s+\w+\s+)?' + _PETRO_NOMBRE + r'\b'
+    r'|\b(?:entonces|en ese entonces)\s+alcalde\s+(?:de bogota\s+)?' + _PETRO_NOMBRE + r'\b'
+    r'|\bpetro\s+(?:\w+\s+){0,3}?(?:entonces\s+)?alcalde\s+de\s+bogota\b')
 
 
 # v1.39: tras «alcaldía de» / «alcalde de» estas palabras no son otra ciudad
@@ -11276,7 +11404,9 @@ _RX_PETRO_EPOCA = re.compile(
 _NO_CIUDAD = frozenset({
     'la', 'el', 'los', 'las', 'ciudad', 'capital', 'distrito', 'gustavo', 'petro', 'carlos',
     'galan', 'claudia', 'lopez', 'enrique', 'penalosa', 'samuel', 'moreno', 'lucho', 'luis',
-    'antanas', 'mockus', 'garzon', 'clara', 'turno', 'entonces', 'su', 'sus', 'ese', 'esa'})
+    'antanas', 'mockus', 'garzon', 'clara', 'turno', 'entonces', 'su', 'sus', 'ese', 'esa',
+    'hoy', 'ahora', 'actual', 'expresidente', 'exmandatario', 'presidente', 'mandatario',
+    'senador', 'exalcalde'})
 
 
 def _alcaldia_de_otra_ciudad(t: str) -> bool:
@@ -11319,7 +11449,7 @@ def es_nota_petro_alcalde(titulo: str, hecho: str = '', voceros=()) -> bool:
     """Nota sobre Gustavo Petro como alcalde (candidato a la Alcaldía,
     exalcalde, su administración en Bogotá, «cuando Petro era alcalde»)."""
     t = nz(titulo)
-    h = nz(hecho)[:400]
+    h = nz(hecho)[:600]
     if not re.search(r'\bpetro\b', t):
         # v1.39: titular sin Petro pero la entrada habla de su época de
         # alcalde. No si el titular trata de un vocero propio (Galán).
@@ -11331,6 +11461,10 @@ def es_nota_petro_alcalde(titulo: str, hecho: str = '', voceros=()) -> bool:
     if _alcaldia_de_otra_ciudad(t):
         return False
     if _RX_PETRO_ALCALDE.search(t) or _RX_PETRO_DISTRITO.search(t):
+        return True
+    # v1.41: titular con Petro y la entrada sitúa la nota en su época de
+    # alcalde («el expresidente Gustavo Petro, cuando era alcalde…»).
+    if h and not _alcaldia_de_otra_ciudad(h) and _RX_PETRO_EPOCA.search(h):
         return True
     return bool(_RX_PETRO_LEAD.search(h))
 
@@ -11349,10 +11483,11 @@ def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict
     if not (sub_asp or sub_pet):
         return out
     for i, row in enumerate(rows):
-        if row.get('is_duplicate'):
+        # v1.42: la corrección manual del analista (xlsx subido) manda.
+        if row.get('is_duplicate') or row.get('_correccion_manual'):
             continue
         tit = _titulo_fila(row, km)
-        hecho = _texto_fila(row, km)[:400]
+        hecho = _texto_fila(row, km)[:600]
         rotulo = ''
         if sub_pet and es_nota_petro_alcalde(tit, hecho, voceros=voceros):
             rotulo, clave_r = sub_pet, 'petro'
@@ -11372,39 +11507,66 @@ def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict
     return out
 
 
-def anclar_subtemas_previos(rows: List[dict], km: dict, entradas: list) -> int:
-    """v1.37: una noticia igual o muy parecida a una ya vista en una corrida
-    anterior (memoria de subtemas del boletín) conserva aquel Subtema_IA.
-    Se decide por noticia: todas las filas que en esta corrida comparten
-    subtema heredan el previo si las que coinciden con la memoria apuntan a
-    uno solo. Devuelve cuántas filas cambiaron."""
+def anclar_subtemas_previos(rows: List[dict], km: dict, entradas: list,
+                            mapa: Optional[dict] = None) -> int:
+    """v1.37/v1.42: una noticia igual o muy parecida a una ya vista (memoria
+    de subtemas del boletín, xlsx corregido u hoja del boletín) conserva
+    aquel Subtema_IA y, si es corrección manual con tono, también el tono.
+
+    Precisión (v1.42): solo cambian las filas que coinciden con la
+    referencia y las de su MISMA noticia en esta corrida (mismo grupo de
+    `mapa` o mismo titular). Ya no se contagia a todas las filas que solo
+    comparten el subtema automático: «Comunidad critica cierre de vía en la
+    calle 13» no hereda «Ampliación de la autopista Norte» por haber caído
+    bajo «Obras viales». Las demás notas conservan el subtema que les dieron
+    las reglas. Devuelve cuántas filas cambiaron."""
     import memoria_cliente
     if not entradas:
         return 0
-    previo: Dict[int, str] = {}
+    previo: Dict[int, dict] = {}
     for i, row in enumerate(rows):
         if row.get('is_duplicate'):
             continue
-        sp = memoria_cliente.buscar_subtema(entradas, _titulo_fila(row, km), _texto_fila(row, km))
-        if sp:
-            previo[i] = sp
+        ent = memoria_cliente.buscar_entrada(entradas, _titulo_fila(row, km), _texto_fila(row, km))
+        if ent:
+            previo[i] = ent
     if not previo:
         return 0
-    por_sub: Dict[str, List[int]] = defaultdict(list)
+    # Misma noticia en esta corrida: mismo grupo o mismo titular.
+    por_noticia: Dict[str, List[int]] = defaultdict(list)
     for i, row in enumerate(rows):
-        if not row.get('is_duplicate'):
-            por_sub[nz(str(row.get('Subtema_IA') or ''))].append(i)
-    cambios = 0
-    for clave_s, idxs in por_sub.items():
-        vistos = {previo[i] for i in idxs if i in previo}
+        if row.get('is_duplicate'):
+            continue
+        gid = (mapa or {}).get(i)
+        clave_n = ('g:%s' % gid) if gid is not None else ('t:' + nz(_titulo_fila(row, km)))
+        por_noticia[clave_n].append(i)
+    destino: Dict[int, dict] = {}
+    for idxs in por_noticia.values():
+        vistos = {}
+        for i in idxs:
+            if i in previo:
+                vistos[nz(previo[i]['subtema'])] = previo[i]
         if not vistos:
             continue
-        destino = {i: next(iter(vistos)) for i in idxs} if (len(vistos) == 1 and clave_s) \
-            else {i: previo[i] for i in idxs if i in previo}
-        for i, sp in destino.items():
-            if str(rows[i].get('Subtema_IA') or '') != sp:
-                rows[i]['Subtema_IA'] = sp
-                cambios += 1
+        if len(vistos) == 1:
+            ent = next(iter(vistos.values()))
+            for i in idxs:
+                destino[i] = previo.get(i, ent)
+        else:
+            for i in idxs:
+                if i in previo:
+                    destino[i] = previo[i]
+    cambios = 0
+    for i, ent in destino.items():
+        row = rows[i]
+        if str(row.get('Subtema_IA') or '') != ent['subtema']:
+            row['Subtema_IA'] = ent['subtema']
+            cambios += 1
+        if ent.get('manual'):
+            row['_correccion_manual'] = True
+            if ent.get('tono') in ('Positivo', 'Neutro', 'Negativo'):
+                row['Tono_IA'] = ent['tono']
+                row['_tono_manual'] = True
     return cambios
 
 

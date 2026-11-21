@@ -517,6 +517,45 @@ def cargar_ids_analizados_desde_sheets(url=None):
     return ids
 
 
+def cargar_hoja_analizadas(url=None, con_correcciones=True):
+    """v1.42: una sola lectura de la hoja «Base, boletín SGB» para dos usos:
+    los IDs ya analizados (filtro) y las correcciones del analista (Título,
+    Tono, Subtema, FECHA INFORME, HORA B) de los boletines recientes, que la
+    corrida usa como memoria: la misma noticia o una muy parecida retoma el
+    tono y el subtema que quedaron en la hoja. Devuelve (ids, correcciones).
+    Lanza ErrorSheetsAnalizadas si no se puede leer o no trae columna ID."""
+    if not con_correcciones:
+        return cargar_ids_analizados_desde_sheets(url), []
+    url = url or SHEETS_ANALIZADAS_CSV_URL
+    try:
+        df = pd.read_csv(url, dtype=str, keep_default_na=False)
+    except Exception as exc:
+        raise ErrorSheetsAnalizadas(
+            "No se pudo leer la hoja de notas ya analizadas en Google Sheets. "
+            "Revisa que esté compartida como 'Cualquier persona con el enlace "
+            "puede ver' o desactiva el filtro para procesar todas las notas."
+        ) from exc
+    id_col = None
+    for c in df.columns:
+        if str(c).replace(" ", "").replace("_", "").lower() in ("id", "idnoticia", "noticiaid"):
+            id_col = c
+            break
+    if id_col is None:
+        raise ErrorSheetsAnalizadas("La hoja de notas ya analizadas no trae una columna 'ID'.")
+    ids = {n for n in (normalizar_id(v) for v in df[id_col]) if n is not None}
+    correcciones = []
+    try:
+        import memoria_cliente
+        # La hoja crece todo el mes: solo cuentan las últimas filas (los
+        # boletines recientes); correcciones_de_tabla filtra además por fecha.
+        cola = df.tail(8000)
+        correcciones = memoria_cliente.correcciones_de_tabla(
+            list(cola.columns), cola.itertuples(index=False, name=None))
+    except Exception:
+        logger.exception("No se pudieron leer las correcciones de la hoja; se sigue sin ellas.")
+    return ids, correcciones
+
+
 def filtrar_ids_analizados(df, ids_set):
     """Quita del dossier las filas cuyo ID ya está analizado.
 

@@ -69,10 +69,22 @@ def test_anclar_por_noticia(tmp_path):
     rows = [_fila("Galán anuncia las nuevas obras del metro en la Avenida 68", sub='Metro Avenida 68'),
             _fila("Obras del metro llegan a la 68", sub='Metro Avenida 68'),
             _fila("Hurto en Suba deja un herido", sub='Hurto en Suba')]
-    n = a.anclar_subtemas_previos(rows, {}, ent)
+    # v1.42: la fila 1 hereda la referencia solo si esta corrida la puso en
+    # la MISMA noticia (mismo grupo) que la fila que coincide.
+    n = a.anclar_subtemas_previos(rows, {}, ent, mapa={0: 1, 1: 1, 2: 2})
     assert n == 2
     assert rows[0]['Subtema_IA'] == rows[1]['Subtema_IA'] == "Obras del metro en la Avenida 68"
     assert rows[2]['Subtema_IA'] == 'Hurto en Suba'
+
+
+def test_anclar_no_contagia_por_subtema_compartido():
+    # v1.42 (precisión): compartir el subtema automático no basta.
+    ent = [m._entrada("Galán anuncia nuevas obras del metro en la Avenida 68", "", "Obras del metro en la Avenida 68")]
+    rows = [_fila("Galán anuncia las nuevas obras del metro en la Avenida 68", sub='Metro de Bogotá'),
+            _fila("Concejales critican retrasos del metro en Kennedy", sub='Metro de Bogotá')]
+    assert a.anclar_subtemas_previos(rows, {}, ent, mapa={0: 1, 1: 2}) == 1
+    assert rows[0]['Subtema_IA'] == "Obras del metro en la Avenida 68"
+    assert rows[1]['Subtema_IA'] == 'Metro de Bogotá'
 
 
 def test_exportar_importar_memoria(tmp_path):
