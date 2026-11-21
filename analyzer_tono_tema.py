@@ -9240,6 +9240,7 @@ def enrich_rows_with_ai(
     _ULTIMO_RESUMEN.pop('memoria', None)
     _ULTIMO_RESUMEN.pop('subtemas_politicos', None)
     _ULTIMO_RESUMEN.pop('tono_gestion_vocero', None)
+    _ULTIMO_RESUMEN.pop('correcciones_sheets_leidas', None)
     _ULTIMO_RESUMEN.pop('subtemas_de_corridas_previas', None)
     _ULTIMO_RESUMEN.pop('para_revisar', None)
     if haiku and cfg.get('memoria'):
@@ -9718,7 +9719,15 @@ def enrich_rows_with_ai(
     # noticia igual o muy parecida a una ya vista conserva su subtema.
     if cfg.get('memoria_subtemas'):
         import memoria_cliente
-        _ancl = anclar_subtemas_previos(rows, km, memoria_cliente.cargar_subtemas(brand, extra))
+        _entr = memoria_cliente.cargar_subtemas(brand, extra)
+        # v1.42: correcciones del analista en la hoja de Google Sheets del
+        # boletín (tono y subtema de las notas ya publicadas).
+        _corr = (extra or {}).get('correcciones_sheets')
+        _corr = _corr if isinstance(_corr, list) else []
+        if _corr:
+            _entr = memoria_cliente.fusionar_correcciones(_entr, _corr)
+            _ULTIMO_RESUMEN['correcciones_sheets_leidas'] = len(_corr)
+        _ancl = anclar_subtemas_previos(rows, km, _entr)
         _ULTIMO_RESUMEN['subtemas_de_corridas_previas'] = _ancl
     # v1.41: el alcalde o un vocero reivindica una gestión concreta =>
     # Positivo (perfil del Distrito). Antes de los subtemas políticos, que
@@ -10535,7 +10544,7 @@ def aplicar_gestion_vocero_final(rows: List[dict], km: dict, brand: str, aliases
     blancos = _con_voceros(aliases, voceros)
     sube = []
     for i, row in enumerate(rows):
-        if row.get('is_duplicate') or row.get('_subtema_politico'):
+        if row.get('is_duplicate') or row.get('_subtema_politico') or row.get('_tono_manual'):
             continue
         if str(row.get('Tono_IA') or '') != 'Neutro':
             continue
@@ -10555,7 +10564,8 @@ def aplicar_gestion_vocero_final(rows: List[dict], km: dict, brand: str, aliases
         grupos_ok = {mapa.get(i) for i in sube if mapa.get(i) is not None}
         extra = [i for i, row in enumerate(rows)
                  if mapa.get(i) in grupos_ok and i not in sube and not row.get('is_duplicate')
-                 and not row.get('_subtema_politico') and str(row.get('Tono_IA') or '') == 'Neutro']
+                 and not row.get('_subtema_politico') and not row.get('_tono_manual')
+                 and str(row.get('Tono_IA') or '') == 'Neutro']
         sube += extra
     for i in sube:
         rows[i]['Tono_IA'] = 'Positivo'
@@ -11467,7 +11477,8 @@ def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict
     if not (sub_asp or sub_pet):
         return out
     for i, row in enumerate(rows):
-        if row.get('is_duplicate'):
+        # v1.42: la corrección manual del analista (xlsx subido) manda.
+        if row.get('is_duplicate') or row.get('_correccion_manual'):
             continue
         tit = _titulo_fila(row, km)
         hecho = _texto_fila(row, km)[:600]
@@ -11503,9 +11514,15 @@ def anclar_subtemas_previos(rows: List[dict], km: dict, entradas: list) -> int:
     for i, row in enumerate(rows):
         if row.get('is_duplicate'):
             continue
-        sp = memoria_cliente.buscar_subtema(entradas, _titulo_fila(row, km), _texto_fila(row, km))
-        if sp:
-            previo[i] = sp
+        ent = memoria_cliente.buscar_entrada(entradas, _titulo_fila(row, km), _texto_fila(row, km))
+        if ent:
+            previo[i] = ent['subtema']
+            if ent.get('manual'):
+                row['_correccion_manual'] = True
+            # v1.42: corrección manual del xlsx: también manda el tono.
+            if ent.get('manual') and ent.get('tono') in ('Positivo', 'Neutro', 'Negativo'):
+                row['Tono_IA'] = ent['tono']
+                row['_tono_manual'] = True
     if not previo:
         return 0
     por_sub: Dict[str, List[int]] = defaultdict(list)

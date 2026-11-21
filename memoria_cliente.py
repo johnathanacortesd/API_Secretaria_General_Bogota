@@ -102,6 +102,7 @@ def borrar(brand: str, extra=None) -> bool:
 # siguiente una noticia igual o muy parecida hereda ese subtema.
 # ============================================================================
 DIAS_SUBTEMAS = 3        # el boletín es diario: tres días bastan
+DIAS_MANUAL = 10         # v1.42: correcciones manuales (xlsx corregido)
 MAX_SUBTEMAS = 6000
 UMBRAL_TITULO = 0.80     # Jaccard de palabras de contenido del titular
 UMBRAL_TEXTO = 0.70      # Jaccard de 3-gramas del comienzo del texto
@@ -136,16 +137,34 @@ def _jac(a: set, b: set) -> float:
     return len(a & b) / len(a | b) if a and b else 0.0
 
 
+def _limite(e: dict) -> str:
+    dias = DIAS_MANUAL if e.get("manual") else DIAS_SUBTEMAS
+    return (datetime.now() - timedelta(days=dias)).isoformat(timespec="seconds")
+
+
+def _vigente(e: Any) -> bool:
+    return isinstance(e, dict) and bool(str(e.get("subtema") or "").strip()) \
+        and str(e.get("fecha") or "") >= _limite(e)
+
+
 def cargar_subtemas(brand: str, extra=None) -> list:
-    """Entradas vigentes: [{t, p, g, subtema, fecha}]."""
+    """Entradas vigentes: [{titulo, texto, subtema, fecha, manual?, tono?}].
+    Las correcciones manuales (`manual`) duran DIAS_MANUAL días."""
     try:
         with open(_ruta_subtemas(brand, extra), encoding="utf-8") as f:
             data = json.load(f)
-        limite = (datetime.now() - timedelta(days=DIAS_SUBTEMAS)).isoformat(timespec="seconds")
-        return [e for e in (data.get("entradas") or [])
-                if isinstance(e, dict) and e.get("subtema") and str(e.get("fecha") or "") >= limite]
+        return [e for e in (data.get("entradas") or []) if _vigente(e)]
     except (OSError, ValueError, AttributeError):
         return []
+
+
+def _escribir_subtemas(brand: str, entradas: list, extra=None) -> None:
+    entradas = sorted(entradas, key=lambda x: x.get("fecha") or "", reverse=True)[:MAX_SUBTEMAS]
+    ruta = _ruta_subtemas(brand, extra)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(ruta), suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"entradas": entradas}, f, ensure_ascii=False)
+    os.replace(tmp, ruta)
 
 
 def _entrada(titulo: str, texto: str, subtema: str) -> dict:
@@ -154,7 +173,14 @@ def _entrada(titulo: str, texto: str, subtema: str) -> dict:
 
 
 def buscar_subtema(entradas: list, titulo: str, texto: str = "") -> Optional[str]:
-    """Subtema de una noticia previa igual o muy parecida, o None.
+    """Subtema de una noticia previa igual o muy parecida, o None."""
+    e = buscar_entrada(entradas, titulo, texto)
+    return e["subtema"] if e else None
+
+
+def buscar_entrada(entradas: list, titulo: str, texto: str = "") -> Optional[dict]:
+    """Entrada de una noticia previa igual o muy parecida, o None. A igual
+    parecido gana la corrección manual.
 
     Igual: mismo titular normalizado. Parecida: titulares con casi las
     mismas palabras de contenido (y los mismos nombres propios), o el mismo
@@ -167,7 +193,7 @@ def buscar_subtema(entradas: list, titulo: str, texto: str = "") -> Optional[str
     for e in entradas:
         et = e.get("titulo") or ""
         if _n(et) == tn:
-            return e["subtema"]
+            return e
         s = 0.0
         ec = _contenido(et)
         if len(c) >= 4 and len(ec) >= 4 and _propios(et) == p:
@@ -178,13 +204,16 @@ def buscar_subtema(entradas: list, titulo: str, texto: str = "") -> Optional[str
             jg = _jac(g, _gramas(e["texto"]))
             if jg >= UMBRAL_TEXTO and len(g) >= 15:
                 s = max(s, jg)
+        if s and e.get("manual"):
+            s += 0.001
         if s > mejor_s:
-            mejor, mejor_s = e["subtema"], s
+            mejor, mejor_s = e, s
     return mejor
 
 
 def guardar_subtemas(brand: str, nuevas: list, extra=None) -> int:
-    """Agrega o renueva [{titulo, texto, subtema}] (por titular normalizado)."""
+    """Agrega o renueva [{titulo, texto, subtema}] (por titular normalizado).
+    Una corrección manual vigente no se pisa con lo que dio una corrida."""
     try:
         previas = cargar_subtemas(brand, extra)
         ahora = datetime.now().isoformat(timespec="seconds")
@@ -192,15 +221,11 @@ def guardar_subtemas(brand: str, nuevas: list, extra=None) -> int:
         for e in nuevas or []:
             k = _n(e.get("titulo"))
             if k and e.get("subtema"):
+                if (por_tit.get(k) or {}).get("manual") and not e.get("manual"):
+                    continue
                 por_tit[k] = dict(e, fecha=ahora)
-        entradas = sorted(por_tit.values(), key=lambda e: e.get("fecha") or "",
-                          reverse=True)[:MAX_SUBTEMAS]
-        ruta = _ruta_subtemas(brand, extra)
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(ruta), suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"entradas": entradas}, f, ensure_ascii=False)
-        os.replace(tmp, ruta)
-        return len(entradas)
+        _escribir_subtemas(brand, list(por_tit.values()), extra)
+        return min(len(por_tit), MAX_SUBTEMAS)
     except (OSError, ValueError):
         return 0
 
@@ -235,29 +260,198 @@ def importar_subtemas(brand: str, contenido, extra=None) -> int:
         raise ValueError("El archivo no es un JSON válido.") from exc
     if not isinstance(data, dict) or not isinstance(data.get("entradas"), list):
         raise ValueError("El archivo no es una memoria de subtemas descargada de la app.")
-    limite = (datetime.now() - timedelta(days=DIAS_SUBTEMAS)).isoformat(timespec="seconds")
     por_tit = {_n(e.get("titulo")): e for e in cargar_subtemas(brand, extra) if _n(e.get("titulo"))}
     importadas = 0
     for e in data["entradas"]:
-        if not isinstance(e, dict) or not str(e.get("subtema") or "").strip():
+        if not _vigente(e):
             continue
         k, fecha = _n(e.get("titulo")), str(e.get("fecha") or "")
-        if not k or fecha < limite:
+        if not k:
             continue
         actual = por_tit.get(k)
-        if actual is None or fecha > str(actual.get("fecha") or ""):
-            por_tit[k] = {"titulo": str(e.get("titulo") or "")[:300],
-                          "texto": str(e.get("texto") or "")[:500],
-                          "subtema": str(e["subtema"]).strip(), "fecha": fecha}
+        if actual is None or (fecha > str(actual.get("fecha") or "")
+                              and (e.get("manual") or not actual.get("manual"))):
+            nueva = {"titulo": str(e.get("titulo") or "")[:300],
+                     "texto": str(e.get("texto") or "")[:500],
+                     "subtema": str(e["subtema"]).strip(), "fecha": fecha}
+            if e.get("manual"):
+                nueva["manual"] = True
+            if str(e.get("tono") or "") in TONOS:
+                nueva["tono"] = e["tono"]
+            por_tit[k] = nueva
         importadas += 1
     try:
-        entradas = sorted(por_tit.values(), key=lambda x: x.get("fecha") or "",
-                          reverse=True)[:MAX_SUBTEMAS]
-        ruta = _ruta_subtemas(brand, extra)
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(ruta), suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"entradas": entradas}, f, ensure_ascii=False)
-        os.replace(tmp, ruta)
+        _escribir_subtemas(brand, list(por_tit.values()), extra)
     except OSError:
         return 0
     return importadas
+
+
+# ============================================================================
+# v1.42: correcciones manuales desde el xlsx de resultados. El analista
+# descarga el xlsx del boletín, corrige Subtema_IA (y si quiere Tono_IA) y
+# lo sube: cada fila queda en la memoria como corrección manual, así la
+# misma noticia (o una muy parecida) en el boletín de la 1 o de las 6
+# retoma el subtema y el tono corregidos.
+# ============================================================================
+TONOS = ("Positivo", "Neutro", "Negativo")
+_COLS_TITULO = ("titulo",)
+_COLS_SUBTEMA = ("subtema ia", "subtema")
+_COLS_TONO = ("tono ia", "tono")
+_COLS_TEXTO = ("cuerpoes", "cuerpo", "texto", "texto completo", "resumen aclaracion",
+               "resumen corto", "resumen", "contexto analizado")
+
+
+def _celda(v: Any) -> str:
+    s = "" if v is None else str(v).strip()
+    return "" if s.lower() in ("nan", "none", "-") else s
+
+
+# Valores que el analista pone en la hoja para notas descartadas.
+_NO_VALE = frozenset({"no aplica", "noaplica", "n a", "na", "duplicada", "duplicado",
+                      "duplicadas", "x", "ninguno", "sin subtema"})
+_COLS_FECHA = ("fecha informe", "fecha")
+_COLS_HORA = ("hora b", "hora boletin", "boletin")
+
+
+def _fecha_boletin(fecha: str, hora: str) -> str:
+    """ISO de la nota según el boletín (FECHA INFORME + HORA B); '' si no
+    se entiende la fecha. «1:00 p.m.» => 13:00, «6:00 p.m.» => 18:00."""
+    f = str(fecha or "").strip()
+    if not f:
+        return ""
+    d = None
+    m = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", f)
+    if m:
+        d = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    else:
+        m = re.match(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})", f)
+        if m:
+            y = int(m.group(3))
+            d = (y + 2000 if y < 100 else y, int(m.group(2)), int(m.group(1)))
+    if not d:
+        return ""
+    hh = 12
+    h = _n(hora)
+    m = re.match(r"(\d{1,2})(?:\s+(\d{2}))?\s*(a m|am|p m|pm)?", h)
+    if m:
+        hh = int(m.group(1)) % 12 if m.group(3) else int(m.group(1))
+        if m.group(3) in ("p m", "pm"):
+            hh += 12
+        hh = min(hh, 23)
+    try:
+        return datetime(d[0], d[1], d[2], hh).isoformat(timespec="seconds")
+    except ValueError:
+        return ""
+
+
+def correcciones_de_tabla(cabecera, filas, ahora: Optional[str] = None) -> list:
+    """Filas [{titulo, texto, subtema, tono?, fecha, manual}] de una tabla
+    de resultados (xlsx corregido o la hoja de Google Sheets del boletín).
+    Necesita «Título» y «Subtema_IA»/«Subtema»; usa «Tono_IA»/«Tono», el
+    texto más largo disponible y FECHA INFORME + HORA B para fechar cada
+    nota (sin fecha, la de ahora). Por titular gana la nota más reciente.
+    Las notas más viejas que DIAS_MANUAL quedan fuera."""
+    cab = [_n(c) for c in cabecera]
+
+    def col(opciones):
+        for o in opciones:
+            if o in cab:
+                return cab.index(o)
+        return None
+    i_t, i_s, i_o = col(_COLS_TITULO), col(_COLS_SUBTEMA), col(_COLS_TONO)
+    if i_t is None or i_s is None:
+        return []
+    i_f, i_h = col(_COLS_FECHA), col(_COLS_HORA)
+    i_x = [cab.index(o) for o in _COLS_TEXTO if o in cab]
+    ahora = ahora or datetime.now().isoformat(timespec="seconds")
+    limite = (datetime.now() - timedelta(days=DIAS_MANUAL)).isoformat(timespec="seconds")
+    por_tit: Dict[str, dict] = {}
+    for fila in filas:
+        fila = list(fila or [])
+        get = (lambda i: _celda(fila[i]) if i is not None and i < len(fila) else "")
+        tit, sub = get(i_t), get(i_s)
+        k = _n(tit)
+        if not k or not sub or _n(sub) in _NO_VALE:
+            continue
+        tono = get(i_o).capitalize()
+        # Con columna de tono, solo cuentan las filas con un tono real:
+        # «No aplica», «Duplicada» o vacío no son referencia de nada.
+        if i_o is not None and tono not in TONOS:
+            continue
+        fecha = _fecha_boletin(get(i_f), get(i_h)) if i_f is not None else ""
+        fecha = fecha or ahora
+        if fecha < limite:
+            continue
+        texto = max((get(i) for i in i_x), key=len, default="")
+        e = _entrada(tit, texto, sub)
+        e.update(fecha=min(fecha, ahora), manual=True)
+        if tono in TONOS:
+            e["tono"] = tono
+        if k not in por_tit or e["fecha"] >= por_tit[k]["fecha"]:
+            por_tit[k] = e
+    return list(por_tit.values())
+
+
+def fusionar_correcciones(entradas: list, correcciones: list) -> list:
+    """Memoria + correcciones (Sheets): una entrada por titular; la
+    corrección manual gana a la automática y, entre manuales, la más
+    reciente."""
+    por_tit = {_n(e.get("titulo")): e for e in entradas or [] if _n(e.get("titulo"))}
+    for e in correcciones or []:
+        k = _n(e.get("titulo"))
+        if not k or not str(e.get("subtema") or "").strip():
+            continue
+        a = por_tit.get(k)
+        if a is None or not a.get("manual") or str(e.get("fecha") or "") >= str(a.get("fecha") or ""):
+            por_tit[k] = dict(e, manual=True)
+    return list(por_tit.values())
+
+
+def leer_correcciones_xlsx(contenido: bytes) -> list:
+    """Filas corregidas de un xlsx de resultados (la primera hoja que tenga
+    «Título» y «Subtema_IA» o «Subtema»). Lanza ValueError si no las
+    encuentra."""
+    import io
+    from openpyxl import load_workbook
+    try:
+        wb = load_workbook(io.BytesIO(contenido), read_only=True, data_only=True)
+    except Exception as exc:  # archivo dañado o que no es xlsx
+        raise ValueError("No se pudo abrir el xlsx: %s" % exc) from exc
+    filas = []
+    try:
+        for ws in wb.worksheets:
+            it = ws.iter_rows(values_only=True)
+            for _ in range(10):  # la cabecera puede no estar en la fila 1
+                cab = next(it, None)
+                if cab is None:
+                    break
+                nombres = [_n(c) for c in cab]
+                if any(c in _COLS_TITULO for c in nombres) and \
+                        any(c in _COLS_SUBTEMA for c in nombres):
+                    # Lo que subes ahora es la corrección vigente: sin fecha del boletín.
+                    nombres_sin_fecha = [("" if n in _COLS_FECHA + _COLS_HORA else c)
+                                         for n, c in zip(nombres, cab)]
+                    filas = correcciones_de_tabla(nombres_sin_fecha, it)
+                    break
+            if filas:
+                break
+    finally:
+        wb.close()
+    if not filas:
+        raise ValueError("El xlsx no tiene las columnas «Título» y «Subtema_IA» (o «Subtema») "
+                         "con datos.")
+    return filas
+
+
+def importar_correcciones_xlsx(brand: str, contenido: bytes, extra=None) -> int:
+    """Guarda en la memoria de subtemas, como corrección manual (gana sobre
+    lo que dio cualquier corrida y dura DIAS_MANUAL días), cada noticia del
+    xlsx corregido. Devuelve cuántas noticias quedaron. ValueError si el
+    archivo no sirve."""
+    filas = leer_correcciones_xlsx(contenido)
+    try:
+        _escribir_subtemas(brand, fusionar_correcciones(cargar_subtemas(brand, extra), filas), extra)
+    except OSError:
+        return 0
+    return len(filas)
