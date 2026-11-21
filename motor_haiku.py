@@ -798,22 +798,23 @@ async def _candidatos_consistencia(args: Dict[str, Any]) -> Dict[str, Any]:
 
 RUBRICA_TONO = """El TONO mide cómo la noticia EVALÚA o deja al CLIENTE (la marca, sus alias, sus voceros o sus entidades). No es el ánimo general de la noticia ni la gravedad del asunto, y NO depende de que el cliente aparezca o hable: que la nota nombre o cite al cliente o a su vocero no la hace Positiva. Se decide en dos pasos.
 Paso 1, el "rol": qué papel tiene el cliente en la nota.
-- gestion: la nota destaca algo CONCRETO que el cliente hizo o entrega a favor de la gente: obra entregada o con avance, programa, inversión, subsidio, jornada, servicio, operativo con resultados, alianza, estudio propio, o la atención efectiva de un problema (ayudas entregadas, emergencia atendida, servicio restablecido).
+- gestion: la nota destaca algo CONCRETO que el cliente hizo, hace, entrega o ANUNCIA a favor de la gente: obra entregada, con avance o que inicia; programa, convocatoria, inscripciones, becas, subsidio, descuento, feria, festival, evento o servicio para la ciudadanía (aunque aún no se haya entregado); inversión, alianza o recursos conseguidos; jornada, campaña o llamado ciudadano; operativo con resultados (capturas, incautaciones, rescates); o la atención efectiva de un problema (ayudas entregadas, emergencia atendida, servicio restablecido). Cuenta igual la gestión de sus entidades: secretarías distritales, IDU, TransMilenio, Empresa Metro, IDRD, IDIGER, alcaldías locales y demás entidades adscritas.
 - logro: la nota le atribuye un resultado o impacto favorable: reconocimiento, premio, cifra buena, respaldo o elogio de terceros.
 - critica: hay crítica, denuncia, queja, sanción, investigación o cuestionamiento DIRIGIDO al cliente, a su administración, a sus funcionarios o a su vocero.
 - afectacion: la nota le atribuye un hecho adverso que daña su imagen u operación (falla, crisis, escándalo, incumplimiento, pérdida) y no trae su voz.
-- respuesta: el cliente o su vocero RECONOCE, admite, explica, aclara, informa, advierte o responde sobre un problema, un retraso, una falla, una afectación, una emergencia o una polémica de su competencia, o fija una posición, sin que la nota destaque una gestión concreta. Hablar de algo malo no es gestión.
+- respuesta: el cliente o su vocero RECONOCE, admite, explica, aclara, informa, advierte o responde sobre un problema, un retraso, una falla, una afectación, una emergencia o una polémica de su competencia, o fija una posición, sin que la nota destaque una acción concreta. Hablar de algo malo no es gestión. Si frente al problema el cliente YA hizo algo concreto (instaló, envió cuadrillas, reparó, atendió, sancionó al contratista, abrió una investigación, entregó ayudas), es gestion (Positivo): respuesta con acción.
+- Medidas restrictivas, alertas y prohibiciones (alerta ambiental o por calidad del aire, pico y placa, cierres viales, decretos, plan de ahorro con prohibiciones, operativos de control o de espacio público) son referencial (Neutro), aunque las anuncie el cliente.
 - equilibrada: hay un señalamiento de terceros contra el cliente Y la nota trae su respuesta, descargo o versión.
 - referencial: el cliente solo aparece mencionado: dato, antecedente, fuente citada entre varias, lugar, lista o contexto. La nota no lo evalúa ni le atribuye una acción.
 Paso 2, el "tono" sale del rol: gestion y logro = Positivo; critica y afectacion = Negativo; respuesta, equilibrada y referencial = Neutro.
 Comprobaciones:
-- Primero el HECHO: ¿qué pasó y es favorable o adverso para el cliente? Si el hecho es adverso (retraso, sobrecosto, falla, afectación, aumento de delitos, emergencia, polémica) y el cliente lo reconoce, lo explica o responde, el rol es respuesta (Neutro), nunca gestion. Solo es gestion cuando el centro de la nota es la solución concreta que el cliente YA ejecutó o entregó, no una explicación, una promesa ni un anuncio de que "se trabaja en ello".
-- El verbo del titular orienta: reconoce, admite, acepta, explica, aclara, responde, defiende, advierte, lamenta, pide, se pronuncia = respuesta. Entrega, inaugura, lanza, invierte, habilita, recupera, logra, amplía = gestion.
+- Primero el HECHO: ¿qué pasó y es favorable o adverso para el cliente? Si el hecho es adverso (retraso, sobrecosto, falla, afectación, aumento de delitos, emergencia, polémica) y el cliente lo reconoce, lo explica o responde, el rol es respuesta (Neutro), nunca gestion. Es gestion cuando el centro de la nota es una acción concreta del cliente: la solución que ya ejecutó o entregó, o el anuncio de un programa, beneficio u obra concreta; no una explicación ni una promesa vaga de que "se trabaja en ello".
+- El verbo del titular orienta: reconoce, admite, acepta, explica, aclara, responde, defiende, advierte, lamenta, pide, se pronuncia = respuesta. Entrega, inaugura, lanza, invierte, habilita, recupera, logra, amplía, inicia obras, abre convocatoria, implementa, conecta, captura = gestion.
 - afectacion o respuesta: el mismo hecho adverso es afectacion si lo cuentan terceros o la nota lo presenta como falla del cliente sin su voz, y respuesta si quien lo cuenta, reconoce o explica es el propio cliente.
 - ¿De quién habla la nota? Un asunto grave (muertes, violencia, crisis, quejas contra otros) no es Negativo si el cliente no es el señalado ni el responsable. Una buena noticia de un tercero no es Positivo si el cliente solo está mencionado.
 - Lo que hace o dice un VOCERO en su cargo cuenta como del cliente. Si el cliente o su vocero denuncia, advierte, opina o critica a OTRO, es respuesta (Neutro): no es una crítica contra él ni una gestión.
 - Una entidad con nombre parecido (otro país, otra ciudad, otra institución), un homónimo del vocero o el cargo como referencia ("candidato a la alcaldía", "cuando X era alcalde") no es el cliente: referencial.
-- Ante duda entre Positivo o Negativo y Neutro, elige Neutro (respuesta o referencial)."""
+- Ante duda entre Negativo y Neutro, elige Neutro. Ante duda entre Positivo y Neutro: si el cliente o una entidad suya ejecuta, entrega o anuncia algo a favor de la gente, elige Positivo; si solo explica, informa un dato o aparece de paso, Neutro."""
 
 RUBRICA_SUBTEMA = """Cómo se redacta un SUBTEMA preciso:
 1. Identifica el HECHO principal de la nota: qué pasó (no el papel del cliente, no un párrafo lateral). Si el cliente solo opina sobre un asunto, el subtema es ese asunto.
@@ -872,6 +873,11 @@ Ejemplos (cliente: una alcaldía):
 - "La Alcaldía explicó las causas de los trancones por las obras y pidió paciencia" -> rol respuesta, Neutro.
 - "Obras del metro completan cuatro meses de atraso, advierte la interventoría" -> rol afectacion, Negativo (hecho adverso atribuido al cliente, sin su voz).
 - "La Alcaldía entregó ayudas a 120 familias afectadas por las lluvias" -> rol gestion, Positivo (atención concreta del problema).
+- "Abren convocatoria de Jóvenes a la E: 3.000 becas en universidades privadas" -> rol gestion, Positivo (anuncio de un programa del Distrito).
+- "Bogotá tendrá tres bazares prenavideños con 60 emprendimientos de mujeres" -> rol gestion, Positivo.
+- "IDU conectó el nuevo puente de la Boyacá con 86" -> rol gestion, Positivo (entidad adscrita).
+- "Ante las quejas de los vecinos, la Secretaría de Movilidad instaló semáforos en el cruce" -> rol gestion, Positivo (respuesta con acción).
+- "Bogotá declara Alerta Fase 1 por calidad del aire en el suroccidente" -> rol referencial, Neutro (alerta o medida restrictiva).
 - "'En nuestra administración logramos destrabar el proyecto; hoy presentamos las obras que permitirán ampliar la autopista Norte de seis a 12 carriles', señaló el alcalde" -> rol gestion, Positivo (el alcalde reivindica una gestión concreta, aunque comparta el crédito con el presidente).
 - "El expresidente Gustavo Petro, cuando era alcalde de Bogotá, propuso un metro subterráneo" -> rol referencial, Neutro (Petro como exalcalde no es el cliente).
 - "Un periodista pidió explicaciones al alcalde por un corte de luz en Teusaquillo; la nota no trae respuesta de la Alcaldía" -> rol critica, Negativo (reclamo dirigido al cliente, sin su respuesta).

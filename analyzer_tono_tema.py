@@ -2348,6 +2348,39 @@ _GESTION_PROGRAMA_PAT = re.compile(
     r'transforma(?:cion)?|operativos?|operacion|cupos|estrena(?:ra)?|estreno)\b')
 
 
+VENTANA_ACTOR_HABLA = 8   # palabras entre el actor y el verbo de habla
+
+
+def _actor_habla_cerca(oracion: str, actores: Sequence[str]) -> bool:
+    """v1.44: el verbo de habla o reacción es del actor (a lo sumo
+    VENTANA_ACTOR_HABLA palabras antes o después de la mención), no de otra
+    persona de la oración. Caso real (Metro Tinto): «uno de ellos aseguró
+    que… un emprendimiento que incluso ya visitó el alcalde» salía
+    Institucional por el «aseguró» del trabajador."""
+    toks = nz(oracion).split()
+    if not toks:
+        return False
+    verbos = [k for k, w in enumerate(toks)
+              if HABLA_PAT.search(w) or _REACCION_PAT.search(w)]
+    if not verbos:
+        return False
+    if re.search(r'\bde acuerdo con\b', ' '.join(toks)):
+        verbos.extend(k for k in range(len(toks) - 2)
+                      if toks[k:k + 3] == ['de', 'acuerdo', 'con'])
+    for a in actores:
+        pa = a.split()
+        n = len(pa)
+        if not n:
+            continue
+        for k in range(len(toks) - n + 1):
+            if toks[k:k + n] != pa:
+                continue
+            ini, fin = k, k + n - 1
+            if any(ini - VENTANA_ACTOR_HABLA <= v <= fin + VENTANA_ACTOR_HABLA for v in verbos):
+                return True
+    return False
+
+
 def aplicar_tipo_por_actor(grupos, etiquetas, brand, aliases, voceros=()):
     """TIPO calibrado con 132 notas etiquetadas a mano (v1.33, flag
     tipo_por_actor). Acierto 43 % -> 74 % en la repetición:
@@ -2387,7 +2420,7 @@ def aplicar_tipo_por_actor(grupos, etiquetas, brand, aliases, voceros=()):
                 # Institucional.
                 nuevo = 'Proyectos y programas'
             elif t == 'Información general' and (
-                    any(HABLA_PAT.search(nz(o)) or _REACCION_PAT.search(o) for o in oraciones)
+                    any(_actor_habla_cerca(o, actores) for o in oraciones)
                     or _marca_sujeto_de_gestion(texto, actores)):
                 nuevo = 'Institucional'
         if nuevo != t:
@@ -8724,14 +8757,20 @@ def unificar_por_noticia(rows: List[dict], mapa: Dict[int, int],
                          brand: str = '', aliases: Sequence[str] = (),
                          voceros: Sequence[str] = (),
                          incluir_tema: bool = True, preservar_tema: bool = False,
-                         estricta: bool = True, rotulos_compartidos: Sequence[str] = ()
+                         estricta: bool = True, rotulos_compartidos: Sequence[str] = (),
+                         salida_noticias: Optional[list] = None
                          ) -> Dict[str, int]:
     """Pase final v4.72 (ver bloque). Trabaja sobre Subtema_IA, Tono_IA,
-    Tema_IA y TIPO de las filas ya volcadas. Devuelve estadísticas."""
+    Tema_IA y TIPO de las filas ya volcadas. Devuelve estadísticas.
+    v1.44: si se pasa `salida_noticias` (lista), se le agregan las noticias
+    (listas de índices de fila) para que los pases posteriores (memoria,
+    subtemas políticos) propaguen por noticia y no solo por grupo."""
     stats = {'noticias': 0, 'noticias_multifila': 0, 'subtema': 0, 'tono': 0, 'tema': 0,
              'separadas': 0}
     originales = originales or {}
     noticias = noticias_por_evidencia(rows, mapa, etiquetas, km, brand, aliases, voceros)
+    if salida_noticias is not None:
+        salida_noticias.extend(list(n) for n in noticias)
     stats['noticias'] = len(noticias)
     stats['noticias_multifila'] = sum(1 for n in noticias if len(n) > 1)
     if not noticias:
@@ -9710,6 +9749,7 @@ def enrich_rows_with_ai(
     # v4.72): la misma noticia (mismo grupo, titular, CuerpoEs o texto muy
     # similar) lleva un solo subtema, un solo tono y un solo tema.
     progreso(93, 'Unificando subtema, tono y tema por noticia…')
+    _noticias_finales: List[List[int]] = []
     _por_noticia = unificar_por_noticia(
         rows, mapa, etiquetas, km, originales=subtemas_originales,
         brand=brand, aliases=aliases, voceros=cfg.get('voceros') or [],
@@ -9717,7 +9757,8 @@ def enrich_rows_with_ai(
         preservar_tema=(theme_model is not None) and incluir_tema,
         estricta=bool(cfg.get('agrupacion_estricta')) and not cfg.get('guia_subtema'),
         rotulos_compartidos=[(r or {}).get('subtema') for r in (cfg.get('subtemas_fijos') or [])
-                             if isinstance(r, dict)])
+                             if isinstance(r, dict)],
+        salida_noticias=_noticias_finales)
     _ULTIMO_RESUMEN['unificacion_por_noticia'] = _por_noticia
     if _eval_dec:
         # Clausifier: las decisiones del evaluador mandan sobre todas las
@@ -9741,7 +9782,7 @@ def enrich_rows_with_ai(
         if _corr:
             _entr = memoria_cliente.fusionar_correcciones(_entr, _corr)
             _ULTIMO_RESUMEN['correcciones_sheets_leidas'] = len(_corr)
-        _ancl = anclar_subtemas_previos(rows, km, _entr, mapa=mapa)
+        _ancl = anclar_subtemas_previos(rows, km, _entr, mapa=mapa, noticias=_noticias_finales)
         _ULTIMO_RESUMEN['subtemas_de_corridas_previas'] = _ancl
     # v1.41: el alcalde o un vocero reivindica una gestión concreta =>
     # Positivo (perfil del Distrito). Antes de los subtemas políticos, que
@@ -9756,13 +9797,27 @@ def enrich_rows_with_ai(
                                            voceros=cfg.get('voceros') or [], mapa=mapa)
         if _gv:
             _ULTIMO_RESUMEN['tono_gestion_vocero'] = len(_gv)
+        # v1.45: gestión, anuncio o respuesta con acción del Distrito o de
+        # sus entidades adscritas => Positivo (medidas y alertas, Neutro).
+        _gd = aplicar_gestion_distrito_final(rows, km, brand, aliases,
+                                             voceros=cfg.get('voceros') or [],
+                                             noticias=_noticias_finales,
+                                             terminos_neutros=cfg.get('tono_neutro_titulo') or [])
+        if _gd:
+            _ULTIMO_RESUMEN['tono_gestion_distrito'] = len(_gd)
     # v1.37: subtemas políticos fijos del perfil (aspirantes a la Alcaldía,
     # Petro como alcalde): mandan sobre todo lo anterior, memoria incluida.
     _pol_fijos = aplicar_subtemas_politicos(
         rows, km, cfg.get('subtemas_politicos'), voceros=cfg.get('voceros') or [],
-        con_tipo=bool(cfg.get('clasificar_tipo_genero')))
+        con_tipo=bool(cfg.get('clasificar_tipo_genero')), noticias=_noticias_finales)
     if _pol_fijos['aspirantes'] or _pol_fijos['petro']:
         _ULTIMO_RESUMEN['subtemas_politicos'] = {k: _pol_fijos[k] for k in ('aspirantes', 'petro')}
+    # v1.44: mismo rótulo con otras mayúsculas = un solo subtema; sin el
+    # «en Bogotá» final en el perfil del Distrito.
+    _formas = unificar_forma_subtemas(
+        rows, quitar_sufijo_bogota=bool(cfg.get('tono_distrito_positivo')))
+    if _formas:
+        _ULTIMO_RESUMEN['subtemas_forma_unificada'] = _formas
     if cfg.get('memoria_subtemas'):
         guardar_subtemas_corrida(rows, km, brand, extra)
 
@@ -10589,6 +10644,204 @@ def aplicar_gestion_vocero_final(rows: List[dict], km: dict, brand: str, aliases
     for i in sube:
         rows[i]['Tono_IA'] = 'Positivo'
     return sorted(sube)
+
+
+# ============================================================================
+# v1.45 (criterio del usuario 2026-11-21): acciones, gestiones, ayudas,
+# programas, anuncios y respuestas CON ACCIÓN de la Alcaldía, el alcalde, la
+# Secretaría General o las entidades adscritas del Distrito = Positivo.
+# - Anuncio de programa, convocatoria, inscripciones, becas, subsidio,
+#   descuento, feria, festival u obra que empieza = Positivo aunque aún no
+#   se haya entregado.
+# - Respuesta con acción («ante las quejas, Movilidad instaló semáforos /
+#   abrió investigación / envió cuadrillas») = Positivo; si solo reconoce,
+#   explica o pide paciencia sigue Neutro («Galán reconoce afectaciones al
+#   cronograma del metro»).
+# - Medidas, alertas y restricciones (Alerta Fase 1, pico y placa, cierres,
+#   prohibiciones, decretos, operativos de espacio público) siguen Neutro.
+# Calibrado con 431 titulares revisados a mano (13-21 nov 2026).
+# ============================================================================
+_GESTION_DISTRITO_PAT = re.compile(
+    r'\b(?:entreg(?:a|o|an|aron|ara|aran|ando)|inaugur\w*|habilit\w*|lanz(?:a|o|an|aron|ara|ara)|'
+    r'pone en marcha|puso en marcha|pondra en marcha|ponen en marcha|abre sus puertas|'
+    r'construy\w*|construira|remodel\w*|renov(?:o|ara|aran|ado|ada)|recuper(?:a|o|an|aron|ara)|'
+    r'benefici(?:a|o|an|aron|ara|aran|ado|ados|adas)|invert(?:ira|iran)|invierte|invirtio|invirtieron|'
+    r'adjudic\w*|cofinanci\w*|financiar(?:a|an)|otorg\w*|ofrec(?:e|en|io|era|eran)|brind\w*|'
+    r'ampliara|ampliaran|amplian|amplio|ampliaron|instal(?:a|o|an|aron|ara)|repar(?:a|o|aron|ara)|'
+    r'restablec\w*|rehabilit\w*|sembr\w*|siembra|rescat\w*|captur(?:a|o|an|aron)|incaut\w*|'
+    r'desarticul\w*|desmont\w*|atend(?:io|ieron|era)|atiende|acompan(?:a|o|an|aron)|'
+    r'apoy(?:a|o|an|aron|ara)|impuls(?:a|o|an|aron|ara)|promuev\w*|promovio|'
+    r'firm(?:o|aron|a|an) (?:un |el |la )?(?:convenio|acuerdo|alianza|contrato)|'
+    r'(?:inicia|inicio|iniciaron|inician|arranca|arranco|arrancan|arrancaron|comienza|comienzan|'
+    r'comenzo|comenzaron|empieza|empiezan|empezo)\s+(?:la\s+|las\s+|el\s+|los\s+)?'
+    r'(?:obras?|construccion|ampliacion|intervencion|recuperacion|programa|jornada|entrega)|'
+    r'recibir(?:a|an) (?:su |sus )?(?:vivienda|subsidio|beca|ayuda|apoyo)\w*|'
+    r'avanz(?:a|an) (?:la |el |las |los )?(?:obra|construccion|ampliacion)|'
+    r'alcanz\w* (?:un |el )?\d+ ?(?:%|por ciento) de avance|finaliz\w* (?:el |la )?(?:izaje|obra|construccion)|'
+    r'hace (?:un )?llamado|invita a|'
+    r'dieron inicio|dio inicio|da inicio|conect(?:o|a|aron|an)|implement(?:a|o|ara|aran)|'
+    r'fortalec(?:e|io|era)|agiliz\w*|recibieron (?:las )?llaves|ya tiene \d+|'
+    r'\d+ (?:km|kilometros) de (?:viaducto|rieles|lineas)|avanza con|'
+    r'complet(?:o|a|aron) \d+|capturad[oa]s|capturan|desmantel\w*|golpe (?:a|contra) (?:la |una )?'
+    r'(?:estructura|banda|red)|gan(?:o|a) (?:el )?(?:premio|reconocimiento)|'
+    r'obtiene (?:el )?(?:premio|reconocimiento)|recib(?:e|io) (?:el )?(?:premio|reconocimiento)|'
+    r'destacad[oa] como|aportar(?:a|an)|pondra \d|llevar(?:a|an) \d+ (?:proyectos|iniciativas)|'
+    r'subio \d+ ?%|propone (?:un )?(?:historico )?aumento)\b')
+_ANUNCIO_DISTRITO_PAT = re.compile(
+    r'\b(?:anunci\w*|present\w*|abre|abrio|abren|abrira|convoc\w*|tendra|tendran|llega|llegan|'
+    r'llegara|reunira|reunio|realiza|realizara|realizo|celebra|celebrara|organiza|organizo|habra|lanza|'
+    r'regresa|acoge|acogera|vivio|se suma|se toman)\b')
+_BENEFICIO_DISTRITO_PAT = re.compile(
+    r'\b(?:convocatorias?|inscripcion(?:es)?|becas?|cupos|subsidios?|descuentos?|beneficios?|'
+    r'programas?|plan(?:es)?|ferias?|festival(?:es)?|jornadas?|bazar(?:es)?|ruta|rutas|talleres?|'
+    r'cursos?|empleos?|vacantes|viviendas?|obras?|proyectos?|centro|parques?|colegios?|jardin(?:es)?|'
+    r'servicios?|ayudas?|apoyos?|mercados?|kits?|estrategia|campana|conciertos?|agenda|'
+    r'oportunidades|alivio|gratis|gratuit\w*|mercados? campesinos?|espacios|foro|eventos?|'
+    r'iniciativas|iluminacion|temporada|asistentes)\b')
+# Respuesta CON acción: el Distrito ya hizo algo frente al problema.
+_RESPUESTA_ACCION_PAT = re.compile(
+    r'\b(?:instal(?:o|aron)|envi(?:o|aron)|despleg(?:o|aron)|dispus(?:o|ieron)|repar(?:o|aron)|'
+    r'restablec(?:io|ieron)|atend(?:io|ieron)|interv(?:ino|inieron)|sancion(?:o|aron)|'
+    r'suspendi(?:o|eron) (?:al |el |la |a )?(?:contratista|contrato|operador)|'
+    r'abri(?:o|eron) (?:una )?investigacion|inici(?:o|aron) (?:una )?investigacion|'
+    r'entreg(?:o|aron) (?:ayudas|mercados|kits|apoyos|subsidios)|activ(?:o|aron) (?:un |el )?plan de '
+    r'(?:atencion|contingencia|apoyo)|reubic(?:o|aron)|evacu(?:o|aron)|rescat(?:o|aron)|'
+    r'captur(?:o|aron)|recuper(?:o|aron))\b')
+# Medidas, alertas y restricciones: Neutro (criterio del usuario).
+_MEDIDA_NEUTRA_PAT = re.compile(
+    r'\b(?:alertas?|restriccion\w*|restring\w*|pico y placa|cierres?|cierra|cerrad[oa]s?|'
+    r'prohib\w*|decretos?|resolucion|ley seca|toque de queda|parrillero|comparendos?|'
+    r'operativos? de (?:control|espacio publico|recuperacion del espacio publico)|'
+    r'espacio publico|desalojo|sellamiento|cortes? de (?:luz|agua|energia)|racionamiento|'
+    r'medidas (?:de ahorro|restrictivas|de movilidad|para ingresar)|plan retorno|'
+    r'calidad del aire|contaminacion)\b')
+
+
+def _actor_distrito_en(oracion_nz: str, det) -> bool:
+    """El cliente (marca, alias, vocero, Alcaldía, Distrito o entidad
+    adscrita) aparece en la oración, o «Bogotá» es el sujeto del titular."""
+    if det is not None and det.menciones(oracion_nz):
+        return True
+    # «Bogotá tendrá…», «Bogotá recupera…»: Bogotá como sujeto de un verbo
+    # en las primeras palabras (no «Bogotá Gourmet 2026…», nombre de evento).
+    m = re.match(r'\W*(?:la\s+)?(?:bogota|el distrito|distrito|alcaldia)\s+((?:\S+\s*){1,4})', oracion_nz)
+    return bool(m and (_GESTION_DISTRITO_PAT.search(m.group(1)) or _ANUNCIO_DISTRITO_PAT.search(m.group(1))))
+
+
+_FUENTE_SOLO_PAT = re.compile(r'\b(?:segun|de acuerdo con|citad[oa] por|inform[oa]cion (?:de|proporcionada por))\b')
+_OTRA_CIUDAD_CACHE = []
+
+
+def _titular_de_otra_ciudad(tit_nz: str) -> bool:
+    """El titular sitúa la nota en otra ciudad o departamento y no nombra
+    a Bogotá («Militarizar Villavicencio…»)."""
+    if not _OTRA_CIUDAD_CACHE:
+        import contexto_cliente as _cc
+        _OTRA_CIUDAD_CACHE.append(re.compile(r'\b(?:%s)\b' % _cc._OTROS_LUGARES))
+        # «avenida Boyacá», «la Boyacá», «autopista Sur»: vías de Bogotá.
+        _OTRA_CIUDAD_CACHE.append(re.compile(
+            r'\b(?:avenida|av|la|troncal|autopista|calle|carrera|ak|ac)\s+(?:%s)\b' % _cc._OTROS_LUGARES))
+    t = _OTRA_CIUDAD_CACHE[1].sub(' ', tit_nz)
+    return bool(_OTRA_CIUDAD_CACHE[0].search(t)) and not re.search(r'\bbogota\b', t)
+
+
+def gestion_distrito_positiva(titulo: str, texto: str = '', det=None,
+                              terminos_neutros: Sequence[str] = (),
+                              voceros: Sequence[str] = ()) -> bool:
+    """True si la nota cuenta una gestión, un anuncio de beneficio o una
+    respuesta con acción del Distrito (ver bloque v1.45). `texto` es el
+    Contexto analizado (los segmentos donde aparece el cliente). `det` es un
+    contexto_cliente.Detector; sin él, el actor se infiere del titular."""
+    tit = nz(titulo or '')
+    if not tit:
+        return False
+    if _MEDIDA_NEUTRA_PAT.search(tit) or _NOTICIA_PROTOCOLO_PAT.search(tit):
+        return False
+    if _alcaldia_de_otra_ciudad(tit) or _titular_de_otra_ciudad(tit):
+        return False
+    # Figura ajena en el titular (perfil `tono_neutro_titulo`, p. ej. Petro)
+    # sin un vocero propio: la nota trata de esa figura (regla de siempre).
+    propios = [nz(v) for v in (voceros or []) if v and str(v)[:1].isupper() and len(nz(v)) >= 4]
+    if any(re.search(r'\b' + re.escape(nz(t)) + r'\b', tit) for t in (terminos_neutros or ()) if nz(t)) \
+            and not any(re.search(r'\b' + re.escape(p) + r'\b', tit) for p in propios):
+        return False
+    # Hecho adverso en el titular («avanza, pero tendrá retrasos»): solo
+    # sube una respuesta con acción.
+    adverso = bool(_ADVERSO_PAT.search(tit) or _ADMITE_PAT.search(tit))
+    oraciones = [tit] + [nz(o) for o in re.split(r'(?<=[.;!?])\s+|\n+|\s\[…\]\s', ctrl(texto or ''))
+                         if o.strip()]
+    # El titular sin el cliente cuenta solo si el cuerpo trae al cliente en
+    # una oración de gestión o beneficio (no un restaurante privado que
+    # «ofrece menús»). Sin detector (solo titular) el actor es implícito.
+    respaldo_cuerpo = det is None or _actor_distrito_en(tit, det) or any(
+        _actor_distrito_en(o, det) and (_GESTION_DISTRITO_PAT.search(o) or _BENEFICIO_DISTRITO_PAT.search(o))
+        for o in oraciones[1:])
+    for k, o in enumerate(oraciones):
+        if not o or (k > 0 and (_MEDIDA_NEUTRA_PAT.search(o) or _NOTICIA_PROTOCOLO_PAT.search(o))):
+            continue
+        if any(s in o for s in _DISTRITO_CORRUPCION_STEMS):
+            return False
+        if k == 0 and not respaldo_cuerpo:
+            continue
+        # En el cuerpo el actor debe estar en la oración, y no solo como
+        # fuente del dato («según la información de la Alcaldía…»).
+        if k > 0 and (not _actor_distrito_en(o, det) or _FUENTE_SOLO_PAT.search(o)):
+            continue
+        if adverso:
+            if _RESPUESTA_ACCION_PAT.search(o) and (k > 0 or _actor_distrito_en(o, det)):
+                return True
+            continue
+        if _GESTION_DISTRITO_PAT.search(o):
+            return True
+        if _ANUNCIO_DISTRITO_PAT.search(o) and _BENEFICIO_DISTRITO_PAT.search(o):
+            return True
+    return False
+
+
+def aplicar_gestion_distrito_final(rows: List[dict], km: dict, brand: str, aliases=(),
+                                   voceros=(), noticias: Optional[Sequence[Sequence[int]]] = None,
+                                   terminos_neutros: Sequence[str] = ()) -> List[int]:
+    """v1.45: pase FINAL (perfil del Distrito). Una nota Neutro cuyo titular
+    o Contexto analizado cuenta una gestión, un anuncio de beneficio o una
+    respuesta con acción del cliente o de una entidad adscrita (ver
+    gestion_distrito_positiva) pasa a Positivo. No toca: duplicadas, notas
+    políticas fijas, tono manual, opinión, ni notas con crítica dirigida al
+    cliente sin respuesta con acción. Con `noticias`, las demás filas Neutro
+    de la misma noticia suben con ella. Devuelve las filas cambiadas."""
+    import contexto_cliente as _cc
+    det = _cc.Detector(brand, aliases, voceros, distrito=True)
+    blancos = _con_voceros(aliases, voceros)
+
+    def _apta(row):
+        if row.get('is_duplicate') or row.get('_subtema_politico') or row.get('_tono_manual'):
+            return False
+        if str(row.get('Tono_IA') or '') != 'Neutro':
+            return False
+        return not (str(row.get('TIPO') or '') == 'Opinión de terceros'
+                    or str(row.get('GÉNERO') or '') in ('Opinión', 'Editorial', 'Columna'))
+
+    sube = []
+    for i, row in enumerate(rows):
+        if not _apta(row):
+            continue
+        tit = _titulo_fila(row, km)
+        ctx = str(row.get('Contexto analizado') or '').strip(' -') or _texto_fila(row, km)[:1500]
+        if not gestion_distrito_positiva(tit, ctx, det=det, terminos_neutros=terminos_neutros,
+                                         voceros=voceros):
+            continue
+        completo = '%s. %s' % (tit, ctx)
+        if _marca_blanco_de_critica(completo, brand, blancos) \
+                and not _RESPUESTA_ACCION_PAT.search(nz(completo)):
+            continue
+        sube.append(i)
+    elegidas = set(sube)
+    for n in (noticias or ()):
+        if any(i in elegidas for i in n):
+            sube += [i for i in n if i not in elegidas and 0 <= i < len(rows) and _apta(rows[i])]
+            elegidas.update(n)
+    for i in sube:
+        rows[i]['Tono_IA'] = 'Positivo'
+    return sorted(set(sube))
 
 
 # Titular con «Bogotá» o el Distrito como sujeto de una gestión («Bogotá
@@ -11606,13 +11859,56 @@ def es_nota_petro_alcalde(titulo: str, hecho: str = '', voceros=()) -> bool:
     return bool(_RX_PETRO_LEAD.search(h))
 
 
+# v1.44: frases de época en pasado («en ese entonces, el expresidente era
+# alcalde de Bogotá», «Petro ocupaba la Alcaldía», «desde la época en que
+# este último se desempeñaba como alcalde»). Solo cuentan en una oración
+# que nombra a Petro o lo retoma (expresidente, este último), y solo si el
+# TITULAR ya nombra a Petro (ver es_nota_petro_alcalde_contexto).
+_RX_ALCALDE_PASADO = re.compile(
+    r'\b(?:era|fue|siendo|ocupaba|ocupo|ejercia como|ejercio como|se desempenaba como|'
+    r'se desempeno como|todavia era|aun era)\s+(?:el\s+)?(?:alcalde|la alcaldia|'
+    r'mandatario distrital)\b')
+_RX_PETRO_REFERIDO = re.compile(
+    r'\b(?:petro|expresidente|ex presidente|exmandatario|ex mandatario|este ultimo|el entonces '
+    r'alcalde)\b')
+
+
+def es_nota_petro_alcalde_contexto(titulo: str, contexto: str) -> bool:
+    """v1.44: titular con Petro y el Contexto analizado (el pasaje donde
+    aparece el cliente) lo sitúa en su época de alcalde. Caso real: la
+    viuda de Miguel Uribe acusa a Petro; los medios recuerdan que el pleito
+    empezó «cuando Petro ocupaba la Alcaldía». El comienzo del cuerpo no lo
+    dice; el pasaje con la mención de la Alcaldía, sí."""
+    t = nz(titulo)
+    c = nz(contexto)
+    if not c or not re.search(r'\bpetro\b', t) or _alcaldia_de_otra_ciudad(t):
+        return False
+    if _RX_PETRO_EPOCA.search(c) and not _alcaldia_de_otra_ciudad(c):
+        return True
+    for oracion in re.split(r'(?<=[.;!?])\s+|\n+', ctrl(str(contexto or ''))):
+        o = nz(oracion)
+        if _RX_ALCALDE_PASADO.search(o) and _RX_PETRO_REFERIDO.search(o) \
+                and not _alcaldia_de_otra_ciudad(o):
+            return True
+    return False
+
+
 def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict],
-                               voceros=(), con_tipo: bool = True) -> dict:
+                               voceros=(), con_tipo: bool = True,
+                               noticias: Optional[Sequence[Sequence[int]]] = None) -> dict:
     """Fija Subtema_IA, Tono_IA (Neutro) y TIPO (Información general) en las
     notas de aspirantes a la Alcaldía y de Petro como alcalde. `reglas` es el
     campo `subtemas_politicos` del perfil: {"aspirantes": rótulo, "petro":
     rótulo}; una clave vacía o ausente apaga esa regla. Devuelve
-    {"aspirantes": n, "petro": n, "filas": [índices]}."""
+    {"aspirantes": n, "petro": n, "filas": [índices]}.
+
+    v1.44: también lee el Contexto analizado (ver
+    es_nota_petro_alcalde_contexto) y, con `noticias` (filas de una misma
+    noticia, del pase por noticia), lleva el rótulo a las demás filas de la
+    noticia: para Petro, las que nombran a Petro en el titular; para
+    aspirantes, si al menos la mitad de la noticia ya lo es. Así la misma
+    noticia no queda repartida entre «Entorno Gustavo Petro» y «Acusación
+    contra Gustavo Petro por atentado»."""
     reglas = reglas or {}
     sub_asp = str(reglas.get('aspirantes') or '').strip()
     sub_pet = str(reglas.get('petro') or '').strip()
@@ -11625,27 +11921,62 @@ def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict
             continue
         tit = _titulo_fila(row, km)
         hecho = _texto_fila(row, km)[:600]
+        ctx_fila = str(row.get('Contexto analizado') or '').strip(' -')
         rotulo = ''
-        if sub_pet and es_nota_petro_alcalde(tit, hecho, voceros=voceros):
+        if sub_pet and (es_nota_petro_alcalde(tit, hecho, voceros=voceros)
+                        or es_nota_petro_alcalde_contexto(tit, ctx_fila)):
             rotulo, clave_r = sub_pet, 'petro'
         elif sub_asp and es_nota_aspirantes_alcaldia(tit, hecho, voceros=voceros):
             rotulo, clave_r = sub_asp, 'aspirantes'
         if not rotulo:
             continue
-        row['Subtema_IA'] = rotulo
-        row['Tono_IA'] = 'Neutro'
-        if con_tipo:
-            row['TIPO'] = 'Información general'
-        # v1.39: marca para que las reglas de GÉNERO/TIPO posteriores
-        # (opinión por URL/Sección) no cambien el TIPO.
-        row['_subtema_politico'] = clave_r
+        _fijar_subtema_politico(row, rotulo, clave_r, con_tipo)
         out['filas'].append(i)
         out[clave_r] += 1
+    # v1.44: la misma noticia lleva el mismo rótulo político.
+    marcadas = set(out['filas'])
+    for n in (noticias or ()):
+        n = [i for i in n if 0 <= i < len(rows) and not rows[i].get('is_duplicate')]
+        claves = Counter(rows[i].get('_subtema_politico') for i in n if i in marcadas)
+        if not claves or len(n) < 2:
+            continue
+        clave_r = claves.most_common(1)[0][0]
+        rotulo = sub_pet if clave_r == 'petro' else sub_asp
+        for i in n:
+            if i in marcadas or rows[i].get('_correccion_manual'):
+                continue
+            tit = nz(_titulo_fila(rows[i], km))
+            if clave_r == 'petro':
+                if _alcaldia_de_otra_ciudad(tit):
+                    continue
+                # El titular nombra a Petro, o lo nombra el pasaje del
+                # cliente y la mayoría de la noticia ya es «Petro alcalde».
+                ctx_i = nz(str(rows[i].get('Contexto analizado') or ''))
+                if not (re.search(r'\bpetro\b', tit)
+                        or (re.search(r'\bpetro\b', ctx_i) and sum(claves.values()) * 2 >= len(n))):
+                    continue
+            elif sum(claves.values()) * 2 < len(n):
+                continue
+            _fijar_subtema_politico(rows[i], rotulo, clave_r, con_tipo)
+            marcadas.add(i)
+            out['filas'].append(i)
+            out[clave_r] += 1
     return out
 
 
+def _fijar_subtema_politico(row: dict, rotulo: str, clave_r: str, con_tipo: bool) -> None:
+    row['Subtema_IA'] = rotulo
+    row['Tono_IA'] = 'Neutro'
+    if con_tipo:
+        row['TIPO'] = 'Información general'
+    # v1.39: marca para que las reglas de GÉNERO/TIPO posteriores
+    # (opinión por URL/Sección) no cambien el TIPO.
+    row['_subtema_politico'] = clave_r
+
+
 def anclar_subtemas_previos(rows: List[dict], km: dict, entradas: list,
-                            mapa: Optional[dict] = None) -> int:
+                            mapa: Optional[dict] = None,
+                            noticias: Optional[Sequence[Sequence[int]]] = None) -> int:
     """v1.37/v1.42: una noticia igual o muy parecida a una ya vista (memoria
     de subtemas del boletín, xlsx corregido u hoja del boletín) conserva
     aquel Subtema_IA y, si es corrección manual con tono, también el tono.
@@ -11656,7 +11987,17 @@ def anclar_subtemas_previos(rows: List[dict], km: dict, entradas: list,
     comparten el subtema automático: «Comunidad critica cierre de vía en la
     calle 13» no hereda «Ampliación de la autopista Norte» por haber caído
     bajo «Obras viales». Las demás notas conservan el subtema que les dieron
-    las reglas. Devuelve cuántas filas cambiaron."""
+    las reglas. Devuelve cuántas filas cambiaron.
+
+    v1.44: «misma noticia» también es la noticia que armó
+    `unificar_por_noticia` (`noticias`: listas de filas). Antes solo
+    contaba el grupo original: en un dossier con 17 notas de la «Alerta
+    Fase 1», las que coincidían con la memoria tomaban «Declaratoria alerta
+    ambiental Fase 1 suroccidente» y las demás de la misma noticia se
+    quedaban con «Alerta Fase 1 por contaminación en suroccidente». Si la
+    memoria trae rótulos distintos para una misma noticia, gana la
+    corrección manual y luego el más repetido; las filas con su propia
+    corrección manual la conservan."""
     import memoria_cliente
     if not entradas:
         return 0
@@ -11669,41 +12010,129 @@ def anclar_subtemas_previos(rows: List[dict], km: dict, entradas: list,
             previo[i] = ent
     if not previo:
         return 0
-    # Misma noticia en esta corrida: mismo grupo o mismo titular.
-    por_noticia: Dict[str, List[int]] = defaultdict(list)
-    for i, row in enumerate(rows):
-        if row.get('is_duplicate'):
-            continue
+    # Misma noticia en esta corrida: mismo grupo, mismo titular o (v1.44)
+    # la misma noticia del pase por noticia.
+    vivas = [i for i, row in enumerate(rows) if not row.get('is_duplicate')]
+    par = {i: i for i in vivas}
+
+    def _raiz(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    def _unir(a, b):
+        ra, rb = _raiz(a), _raiz(b)
+        if ra != rb:
+            par[max(ra, rb)] = min(ra, rb)
+
+    primero_clave: Dict[str, int] = {}
+    clave_de: Dict[int, str] = {}
+    for i in vivas:
         gid = (mapa or {}).get(i)
-        clave_n = ('g:%s' % gid) if gid is not None else ('t:' + nz(_titulo_fila(row, km)))
-        por_noticia[clave_n].append(i)
+        clave_n = ('g:%s' % gid) if gid is not None else ('t:' + nz(_titulo_fila(rows[i], km)))
+        clave_de[i] = clave_n
+        if clave_n in primero_clave:
+            _unir(i, primero_clave[clave_n])
+        else:
+            primero_clave[clave_n] = i
+    for n in (noticias or ()):
+        n = [i for i in n if i in par]
+        for j in n[1:]:
+            _unir(n[0], j)
+    por_noticia: Dict[int, List[int]] = defaultdict(list)
+    for i in vivas:
+        por_noticia[_raiz(i)].append(i)
     destino: Dict[int, dict] = {}
     for idxs in por_noticia.values():
-        vistos = {}
+        vistos: Dict[str, dict] = {}
+        peso: Counter = Counter()
         for i in idxs:
             if i in previo:
-                vistos[nz(previo[i]['subtema'])] = previo[i]
+                k = nz(previo[i]['subtema'])
+                # La corrección manual pesa más que la memoria automática.
+                if k not in vistos or (previo[i].get('manual') and not vistos[k].get('manual')):
+                    vistos[k] = previo[i]
+                peso[k] += 10 if previo[i].get('manual') else 1
         if not vistos:
             continue
-        if len(vistos) == 1:
-            ent = next(iter(vistos.values()))
-            for i in idxs:
-                destino[i] = previo.get(i, ent)
-        else:
-            for i in idxs:
-                if i in previo:
-                    destino[i] = previo[i]
+        mejor = max(peso, key=lambda k: (peso[k], -min(
+            n for n, i in enumerate(idxs) if i in previo and nz(previo[i]['subtema']) == k)))
+        ent = vistos[mejor]
+        for i in idxs:
+            propio = previo.get(i)
+            # Una fila con su propia corrección manual la conserva; las demás
+            # toman el rótulo ganador de su noticia.
+            destino[i] = propio if (propio and propio.get('manual')) else ent
+    # El tono de una corrección manual sigue viajando solo dentro del grupo
+    # original (o el mismo titular), como antes: el subtema se unifica por
+    # noticia, el tono no se impone a otros medios.
+    claves_ent: Dict[str, set] = defaultdict(set)
+    for i, ent in previo.items():
+        if ent.get('manual'):
+            claves_ent[nz(ent['subtema'])].add(clave_de.get(i))
     cambios = 0
     for i, ent in destino.items():
         row = rows[i]
         if str(row.get('Subtema_IA') or '') != ent['subtema']:
             row['Subtema_IA'] = ent['subtema']
             cambios += 1
+        row['_subtema_memoria'] = True
         if ent.get('manual'):
+            # El subtema es el del analista: ninguna regla posterior lo cambia.
             row['_correccion_manual'] = True
-            if ent.get('tono') in ('Positivo', 'Neutro', 'Negativo'):
+            if ent.get('tono') in ('Positivo', 'Neutro', 'Negativo') \
+                    and clave_de.get(i) in claves_ent[nz(ent['subtema'])]:
                 row['Tono_IA'] = ent['tono']
                 row['_tono_manual'] = True
+    return cambios
+
+
+_SUFIJO_BOGOTA = re.compile(r'\s+en\s+(?:la\s+ciudad\s+de\s+)?bogot[aá](?:\s+d\.?\s*c\.?)?\s*$', re.I)
+
+
+def unificar_forma_subtemas(rows: List[dict], quitar_sufijo_bogota: bool = True) -> int:
+    """v1.44: último pase de forma sobre las filas volcadas.
+
+    - Un mismo rótulo escrito con otras mayúsculas o tildes es el mismo
+      subtema: «Declaratoria alerta ambiental fase 1 suroccidente» y «…Fase
+      1…» quedaban como dos subtemas en el informe. Gana la forma de la
+      corrección manual, si la hay, y si no la más repetida.
+    - Con `quitar_sufijo_bogota` (cliente Distrito: todo pasa en Bogotá), el
+      «en Bogotá» final sobra («Bar Week 2026 en Bogotá» -> «Bar Week
+      2026»), si quedan al menos dos palabras. No toca correcciones manuales
+      ni rótulos políticos fijos.
+    Devuelve cuántas filas cambiaron."""
+    cambios = 0
+    vivas = [r for r in rows if not r.get('is_duplicate')
+             and str(r.get('Subtema_IA') or '').strip() not in ('', '-')]
+    if quitar_sufijo_bogota:
+        for r in vivas:
+            if r.get('_correccion_manual') or r.get('_subtema_politico'):
+                continue
+            sub = str(r.get('Subtema_IA') or '').strip()
+            corto = _SUFIJO_BOGOTA.sub('', sub).strip()
+            if corto != sub and len(corto.split()) >= 2:
+                r['Subtema_IA'] = corto
+                cambios += 1
+    formas: Dict[str, Counter] = defaultdict(Counter)
+    manual: Dict[str, str] = {}
+    for r in vivas:
+        sub = str(r.get('Subtema_IA') or '').strip()
+        k = nz(sub)
+        formas[k][sub] += 1
+        if r.get('_correccion_manual'):
+            manual.setdefault(k, sub)
+    for r in vivas:
+        sub = str(r.get('Subtema_IA') or '').strip()
+        k = nz(sub)
+        if len(formas[k]) < 2:
+            continue
+        ganador = manual.get(k) or max(formas[k].items(), key=lambda kv: (
+            kv[1], sum(1 for ch in kv[0] if ch.isupper()), -len(kv[0])))[0]
+        if sub != ganador:
+            r['Subtema_IA'] = ganador
+            cambios += 1
     return cambios
 
 
