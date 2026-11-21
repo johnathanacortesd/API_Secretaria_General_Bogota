@@ -1055,9 +1055,14 @@ def construir_grupos(
     return grupos, mapa
 
 
+SIM_FUSION_GRUPOS = 0.35   # parecido mínimo (coseno TF-IDF) entre dos grupos para unirlos
+
+
 def fusionar_grupos_por_noticia(rows: List[dict], grupos: List[dict], mapa: Dict[int, int],
                                 km: dict, brand: str = '', aliases: Sequence[str] = (),
-                                voceros: Sequence[str] = ()) -> Tuple[List[dict], Dict[int, int], int]:
+                                voceros: Sequence[str] = (),
+                                umbral: float = SIM_FUSION_GRUPOS
+                                ) -> Tuple[List[dict], Dict[int, int], int]:
     """v1.46: antes de clasificar, une los grupos que son la MISMA noticia
     por su CuerpoEs (y título y Contexto analizado): mismo texto, texto muy
     parecido (TF-IDF) o pasajes literales compartidos, con el veto de lugar
@@ -1079,12 +1084,36 @@ def fusionar_grupos_por_noticia(rows: List[dict], grupos: List[dict], mapa: Dict
             x = par[x]
         return x
 
+    # Dentro de cada noticia, dos grupos se unen solo si alguna nota de uno
+    # se parece de verdad (texto completo) a alguna del otro: una frase
+    # literal compartida o una cadena de parecidos no basta antes de
+    # clasificar («Embalses se alejan del 80 %» no es el plan de ahorro de
+    # la Alcaldía; el reclamo de Hollman Morris por un corte de luz no es el
+    # aviso de cortes programados de Enel).
+    import numpy as np
+    filas_n = sorted({i for n in noticias if len({mapa.get(j) for j in n}) > 1 for i in n})
+    S = pos = None
+    if filas_n:
+        S = matriz_similitud(
+            [texto_noticia(_titulo_fila(rows[i], km), _texto_fila(rows[i], km),
+                           str(rows[i].get('Contexto analizado') or '').strip(' -')) for i in filas_n],
+            excluir=tokens_marca(brand, aliases, voceros))
+        pos = {i: k for k, i in enumerate(filas_n)}
     for n in noticias:
         gids = list(dict.fromkeys(mapa[i] for i in n if i in mapa))
-        for g in gids[1:]:
-            a, b = raiz(gids[0]), raiz(g)
-            if a != b:
-                par[max(a, b)] = min(a, b)
+        if len(gids) < 2:
+            continue
+        miembros = defaultdict(list)
+        for i in n:
+            if i in mapa:
+                miembros[mapa[i]].append(pos[i])
+        for x in range(len(gids)):
+            for y in range(x + 1, len(gids)):
+                a, b = raiz(gids[x]), raiz(gids[y])
+                if a == b:
+                    continue
+                if float(S[np.ix_(miembros[gids[x]], miembros[gids[y]])].max()) >= umbral:
+                    par[max(a, b)] = min(a, b)
     bloques = defaultdict(list)
     for g in grupos:
         bloques[raiz(g['grupo'])].append(por_gid[g['grupo']])
@@ -9233,12 +9262,13 @@ def enrich_rows_with_ai(
         # Agilidad: agentes clasificadores en paralelo (0/1 = uno solo) y
         # memoria de clasificaciones previas del cliente.
         'paralelo': int(extra.get('paralelo', 4) or 0),
-        'memoria': bool(extra.get('memoria', True)),
+        # v1.46: apagadas por defecto: el resultado sale solo del xlsx de entrada.
+        'memoria': bool(extra.get('memoria', False)),
         'tono_solo_gestion': bool(extra.get('tono_solo_gestion')),
         'tono_neutro_titulo': [str(x) for x in (extra.get('tono_neutro_titulo') or []) if str(x).strip()],
         # v1.37: subtemas políticos fijos y memoria de subtemas del boletín.
         'subtemas_politicos': dict(extra.get('subtemas_politicos') or {}),
-        'memoria_subtemas': bool(extra.get('memoria_subtemas', extra.get('memoria', True))),
+        'memoria_subtemas': bool(extra.get('memoria_subtemas', False)),
         'tipo_por_actor': bool(extra.get('tipo_por_actor')),
         'api_key': api_key,
         'typesafe_api_key': extra.get('typesafe_api_key') or '',

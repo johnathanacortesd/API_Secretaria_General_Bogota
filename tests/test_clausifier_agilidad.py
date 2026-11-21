@@ -209,11 +209,17 @@ def test_resultado_trae_tiempos_vista_y_para_revisar():
     assert ('auditor', None) in reg                       # corrió a la vez que el evaluador
 
 
+def test_memoria_apagada_por_defecto():
+    # v1.46: el resultado sale solo del xlsx de entrada.
+    r = _correr([])
+    assert r['analisis']['memoria'] == {'activa': False, 'reutilizadas': 0, 'guardadas': 0}
+
+
 def test_segunda_corrida_reutiliza_la_memoria_y_da_lo_mismo():
     reg1, reg2 = [], []
-    r1 = _correr(reg1)
+    r1 = _correr(reg1, memoria=True)
     assert r1['analisis']['memoria'] == {'activa': True, 'reutilizadas': 0, 'guardadas': 3}
-    r2 = _correr(reg2)
+    r2 = _correr(reg2, memoria=True)
     assert r2['analisis']['memoria']['reutilizadas'] == 3
     assert not [k for k, _ in reg2 if k in ('unico', 'tramo', 'cierre')]      # el agente no corrió
     assert r2['analisis']['costo_aprox_usd'] == 0
@@ -221,7 +227,7 @@ def test_segunda_corrida_reutiliza_la_memoria_y_da_lo_mismo():
     assert clave(r1) == clave(r2)
     # Otra configuración (nuevo alias) no usa la memoria anterior.
     reg3 = []
-    r3 = _correr(reg3, aliases=['la Marca'])
+    r3 = _correr(reg3, aliases=['la Marca'], memoria=True)
     assert r3['analisis']['memoria']['reutilizadas'] == 0
     # Y se puede apagar.
     reg4 = []

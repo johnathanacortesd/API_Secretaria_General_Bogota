@@ -746,7 +746,8 @@ def main():
             # v1.37: fuera del formulario (st.download_button no se puede usar
             # dentro de st.form). La marca sale del perfil elegido o de la
             # última marca escrita.
-            _render_memoria_subtemas(st.session_state.get("brand_input") or "", clave="cfg")
+            # v1.46: la memoria de subtemas del boletín está apagada (el
+            # resultado sale solo del xlsx de entrada); su panel ya no se muestra.
             tab_std, tab_custom = st.tabs(["📋 Dossier estándar", "🗂 Columnas personalizadas"])
             with tab_std:
                 # --- Perfil de cliente (multicliente): precarga marca, alias, voceros,
@@ -981,13 +982,11 @@ def main():
                                      "$0.10 por 1M tokens de entrada; ideal para dossiers de alto volumen).",
                             )
                         memoria_chk = st.checkbox(
-                            "Reutilizar clasificaciones previas de este cliente", value=True,
+                            "Reutilizar clasificaciones previas de este cliente", value=False,
                             help="Solo Claude Haiku. Una noticia ya clasificada para este cliente con la "
-                                 "misma configuración hereda su tono y subtema sin volver al modelo: más "
-                                 "rápido, sin costo y con el mismo resultado. Además (cualquier motor), "
-                                 "una noticia igual o muy parecida a una vista en los últimos 3 días "
-                                 "conserva el subtema que tuvo en el boletín anterior (panel «🧠 Memoria "
-                                 "de subtemas del boletín», arriba). Desmárcalo para clasificar todo de nuevo.")
+                                 "misma configuración hereda su tono y subtema sin volver al modelo (más "
+                                 "rápido y sin costo). Apagado por defecto: el tono y el subtema salen "
+                                 "solo del xlsx de entrada.")
                         st.markdown("**💾 Perfil de cliente**")
                         guardar_chk = st.checkbox(
                             "Guardar esta configuración como perfil al procesar",

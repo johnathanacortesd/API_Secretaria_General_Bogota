@@ -5,7 +5,7 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
-### v1.46 — La misma noticia, un solo grupo antes de clasificar; Sheets solo para los ID (2026-11-21)
+### v1.46 — La misma noticia en un solo grupo antes de clasificar; Sheets solo para los ID; sin memorias (2026-11-21)
 
 - **Agrupación por CuerpoEs antes del modelo** (`fusionar_grupos_por_noticia`):
   después de `construir_grupos`, los grupos que son la misma noticia se unen.
@@ -13,18 +13,34 @@ un xlsx corregido.
   final: mismo CuerpoEs, texto muy parecido (TF-IDF, sin la marca) y pasajes
   literales compartidos. Se conservan sus guardas: el veto de lugar o
   persona distinta y que el pie fijo de un medio no une notas.
+  - Además, dos grupos solo se unen si alguna nota de uno se parece de
+    verdad, por el texto completo, a alguna del otro (coseno ≥
+    `SIM_FUSION_GRUPOS` = 0,35). Una frase literal compartida o una cadena
+    de parecidos no basta antes de clasificar: «Embalses se alejan del 80 %»
+    no es el plan de ahorro de la Alcaldía, y el reclamo de Hollman Morris
+    por un corte de luz no es el aviso de cortes programados de Enel.
   - Aplica también con agrupación estricta. Antes el modelo recibía la misma
     noticia partida en varios grupos y escribía un subtema distinto para cada
     pedazo; ahora ve todos sus titulares juntos (hasta 6) y escribe un solo
     subtema.
-  - Con las 52 notas del 21 de noviembre (texto parcial): las noticias del
-    revisado partidas en varios grupos bajan de 5 a 2, sin mezclar noticias
-    distintas.
+  - Medido con los dossiers de entrada del 21 de noviembre (CuerpoEs real),
+    contra los subtemas revisados a mano. Se cuentan las noticias del
+    revisado que quedan partidas en varios grupos:
+    - boletín de la 1 p. m.: de 18 a 9;
+    - boletín de las 6 p. m.: de 20 a 9 (las 16 notas del inicio de obras de
+      la Autonorte quedan en un solo grupo).
+    - Los grupos que juntan dos rótulos del revisado son la misma noticia
+      rotulada de dos formas (Gastrolab, Coliseos Menores, Alerta Fase 1).
   - Se apaga con `agrupar_por_cuerpo: false` en el perfil.
 - **Google Sheets solo para los ID ya analizados**: la app ya no lee de la
   hoja el tono ni el subtema corregidos (se quitó la casilla «Retomar tono y
   subtema corregidos en la hoja»), y el analizador ignora esas correcciones
   aunque lleguen. La casilla «Excluir notas ya analizadas» sigue igual.
+- **Memorias apagadas por defecto**: el resultado sale solo del xlsx de
+  entrada.
+  - La memoria de subtemas del boletín (corridas anteriores, xlsx corregido)
+    ya no corre salvo `memoria_subtemas: true`, y su panel ya no se muestra.
+  - La casilla «Reutilizar clasificaciones previas» queda desmarcada.
 - Pruebas: `tests/test_v146_agrupar_por_cuerpo.py`.
 
 ### v1.45 — Gestiones, anuncios y respuestas con acción del Distrito = Positivo (2026-11-21)
