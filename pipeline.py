@@ -1044,6 +1044,70 @@ def aplicar_opinion_haiku(rows, brand="", aliases=(), voceros=()) -> int:
     return cambios
 
 
+# v1.44: columna en primera persona sin sección ni URL de opinión. Caso real
+# (pares.com.co, «El peor lugar para ir a un concierto en Bogotá»): «Hace
+# seis meses compramos la boleta… lo que muchos temíamos, lo que no queremos
+# que nos pase los que vamos a un evento…» salía Noticia y Positivo porque
+# nombra de paso al alcalde. Las citas entre comillas no cuentan (una
+# entrevista o un testimonio también hablan en primera persona).
+_PRIMERA_PERSONA_VERBO = re.compile(
+    r"\b(?:compramos|fuimos|vamos|tenemos|queremos|temiamos|tememos|creo|pienso|considero|"
+    r"recuerdo|vivimos|sabemos|llegamos|estamos|somos|podemos|debemos|necesitamos|esperamos|"
+    r"pagamos|vimos|hicimos|tuvimos|quisimos|pudimos|sentimos|nos toco|me toco|me parece|"
+    r"me pregunto|confieso|admito|me temo)\b")
+_PRIMERA_PERSONA_PRON = re.compile(
+    r"\b(?:yo|me|mi|mis|conmigo|nosotros|nosotras|nuestro|nuestra|nuestros|nuestras)\b")
+_ATRIBUCION_VERBO = re.compile(
+    r"\b(?:dijo|dice|afirmo|afirma|aseguro|asegura|conto|cuenta|relato|relata|explico|explica|"
+    r"senalo|senala|indico|manifesto|agrego|declaro|sostuvo|comento|narro|revela|"
+    r"entrevista|entrevistado|entrevistada)\b")
+_CITA_PAT = re.compile(r"«[^»]*»|“[^”]*”|\"[^\"]*\"")
+_ELOGIO_PAT = re.compile(
+    r"\b(?:elogi\w*|aplaud\w*|felicit\w*|acierto|acertad\w*|bien hecho|buena gestion|"
+    r"gran trabajo|hay que reconocer)\b")
+
+
+def es_columna_primera_persona(texto, titulo="") -> bool:
+    """True si el comienzo de la nota (sin las citas) está escrito por el
+    autor en primera persona: al menos 2 verbos y 4 marcas de primera
+    persona, sin ninguna atribución («dijo», «afirmó», «según»…) ni en el
+    texto ni en el titular. Una entrevista pregunta-respuesta también habla
+    en primera persona sin comillas, pero atribuye («afirma el director»)."""
+    tit = re.sub(r"[^a-z0-9ñ ]+", " ", _norm_simple(titulo))
+    if _ATRIBUCION_VERBO.search(tit):
+        return False
+    t = _CITA_PAT.sub(" ", str(texto or "")[:1500])
+    t = re.sub(r"[^a-z0-9ñ ]+", " ", _norm_simple(t))
+    verbos = len(_PRIMERA_PERSONA_VERBO.findall(t))
+    marcas = verbos + len(_PRIMERA_PERSONA_PRON.findall(t))
+    return verbos >= 2 and marcas >= 4 and not _ATRIBUCION_VERBO.search(t)
+
+
+def aplicar_columna_primera_persona(rows) -> int:
+    """v1.44: Noticia web escrita en primera persona por el autor => GÉNERO
+    Opinión (el TIPO no se toca: la evidencia es más débil que la Sección o
+    la URL). Un Positivo de esa columna sin elogio explícito baja a Neutro:
+    la mención de paso del alcalde en una columna no es gestión destacada.
+    No toca duplicadas, notas políticas fijas ni correcciones manuales.
+    Devuelve filas cambiadas."""
+    cambios = 0
+    for row in rows:
+        if row.get("is_duplicate") or row.get("_subtema_politico") \
+                or row.get("_correccion_manual"):
+            continue
+        if (row.get("GÉNERO") or "") != "Noticia" or _tipo_medio_norm(row) != "Internet":
+            continue
+        texto = row.get("CuerpoEs") or row.get("Resumen - Aclaracion") or ""
+        if not es_columna_primera_persona(texto, row.get("Título") or ""):
+            continue
+        row["GÉNERO"] = "Opinión"
+        if row.get("Tono_IA") == "Positivo" and not row.get("_tono_manual") \
+                and not _ELOGIO_PAT.search(_norm_simple(texto)):
+            row["Tono_IA"] = "Neutro"
+        cambios += 1
+    return cambios
+
+
 def aplicar_genero_por_frase_entrevista(rows) -> int:
     """GÉNERO por la frase "En entrevista con" (v1.19, orden del usuario):
     si la noticia dice "En entrevista con" (en el título o en el cuerpo)
@@ -2127,6 +2191,8 @@ def process_dossier(
         aplicar_opinion_haiku(rows, ai_config.get("brand") or "",
                               ai_config.get("aliases") or [],
                               ai_extra.get("voceros") or ai_config.get("voceros") or [])
+        # v1.44: columna en primera persona sin sección ni URL de opinión.
+        aplicar_columna_primera_persona(rows)
 
     # v1.18/v1.14: FECHA INFORME siempre es la fecha de procesamiento
     # (Bogotá), en cualquier camino que la exporte — no solo en formato

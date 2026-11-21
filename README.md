@@ -5,6 +5,46 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.44 — La misma noticia, un solo subtema (2026-11-21)
+
+Revisión humana del boletín del 21 de noviembre (52 notas, 17 corregidas).
+
+- **Memoria de subtemas por noticia** (`anclar_subtemas_previos`): el rótulo
+  recordado ahora pasa a todas las filas de la misma noticia que armó el pase
+  por noticia, no solo a su grupo original. Caso real: de 17 notas de la
+  «Alerta Fase 1», 11 tomaban «Declaratoria alerta ambiental Fase 1
+  suroccidente» y 6 se quedaban con «Alerta Fase 1 por contaminación en
+  suroccidente». Si la memoria trae rótulos distintos para la misma noticia,
+  gana la corrección manual y luego el más repetido. El **tono** de una
+  corrección manual sigue viajando solo dentro de su grupo (no se impone a
+  otros medios).
+- **Petro como alcalde** (`aplicar_subtemas_politicos`): también lee el
+  Contexto analizado (`es_nota_petro_alcalde_contexto`: «Petro ocupaba la
+  Alcaldía», «en ese entonces, el expresidente era alcalde», «este último se
+  desempeñaba como alcalde»), con Petro en el titular. Y lleva el rótulo a
+  las demás filas de la misma noticia que nombran a Petro. Caso real: la
+  viuda de Miguel Uribe acusa a Petro, repartida entre «Entorno Gustavo
+  Petro», «Acusación contra Gustavo Petro por atentado» y «Acusación de viuda
+  de Uribe contra Petro».
+- **Forma del subtema** (`unificar_forma_subtemas`, último pase): el mismo
+  rótulo con otras mayúsculas o tildes es un solo subtema («…fase 1…» /
+  «…Fase 1…»); en el perfil del Distrito sobra el «en Bogotá» final («Bar
+  Week 2026 en Bogotá» → «Bar Week 2026»). No toca correcciones manuales ni
+  rótulos políticos.
+- **TIPO por actor**: el verbo de habla tiene que ser del cliente (a lo sumo
+  8 palabras de la mención). Caso real: Metro Tinto salía Institucional por el
+  «aseguró» de un trabajador en la misma oración en que «ya visitó el
+  alcalde».
+- **Columna en primera persona** (`aplicar_columna_primera_persona`, modo
+  Haiku): una nota web escrita por el autor en primera persona («compramos la
+  boleta… lo que muchos temíamos…»), sin citas ni atribuciones, pasa a
+  GÉNERO Opinión; su Positivo sin elogio explícito baja a Neutro. Caso real:
+  pares.com.co, «El peor lugar para ir a un concierto en Bogotá». Las
+  entrevistas pregunta-respuesta («afirma el director») no cuentan.
+- Sin cambio (criterio del analista, no regla general): fundir
+  «Temperaturas cercanas a 26 grados» con «Impactos del fenómeno de El Niño».
+- Pruebas: `tests/test_v144_misma_noticia_final.py`.
+
 ### v1.38 — GÉNERO por URL solo con la sección del enlace (2026-11-15)
 
 - Una nota de minuto30.com («incendio-cerca-de-la-autopista-sur-genero-una-
