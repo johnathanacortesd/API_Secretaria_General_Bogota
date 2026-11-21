@@ -128,6 +128,11 @@ def _propios(titulo: str) -> set:
     return {_n(w) for w in toks[1:] if w[:1].isupper() and len(w) >= 3} - _VACIAS
 
 
+def _en_mayusculas(titulo: str) -> bool:
+    letras = [ch for ch in str(titulo or "") if ch.isalpha()]
+    return len(letras) >= 8 and sum(ch.isupper() for ch in letras) >= 0.8 * len(letras)
+
+
 def _gramas(texto: str, k: int = 3) -> set:
     w = _n(texto).split()[:80]
     return {" ".join(w[i:i + k]) for i in range(max(0, len(w) - k + 1))}
@@ -196,7 +201,9 @@ def buscar_entrada(entradas: list, titulo: str, texto: str = "") -> Optional[dic
             return e
         s = 0.0
         ec = _contenido(et)
-        if len(c) >= 4 and len(ec) >= 4 and _propios(et) == p:
+        # Un titular en MAYÚSCULAS no dice cuáles son nombres propios.
+        mismos_propios = _propios(et) == p or _en_mayusculas(et) or _en_mayusculas(titulo)
+        if len(c) >= 4 and len(ec) >= 4 and mismos_propios:
             jt = _jac(c, ec)
             if jt >= UMBRAL_TITULO:
                 s = jt
@@ -296,8 +303,9 @@ def importar_subtemas(brand: str, contenido, extra=None) -> int:
 # ============================================================================
 TONOS = ("Positivo", "Neutro", "Negativo")
 _COLS_TITULO = ("titulo",)
-_COLS_SUBTEMA = ("subtema ia", "subtema")
-_COLS_TONO = ("tono ia", "tono")
+# Hoja «Base, boletín SGB»: TEMA = Subtema_IA, IMPACTO = Tono_IA.
+_COLS_SUBTEMA = ("subtema ia", "subtema", "tema")
+_COLS_TONO = ("tono ia", "tono", "impacto")
 _COLS_TEXTO = ("cuerpoes", "cuerpo", "texto", "texto completo", "resumen aclaracion",
                "resumen corto", "resumen", "contexto analizado")
 

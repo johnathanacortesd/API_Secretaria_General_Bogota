@@ -906,7 +906,7 @@ def main():
                         correcciones_sheets_chk = st.checkbox(
                             "Retomar tono y subtema corregidos en la hoja (Google Sheets)",
                             value=True,
-                            help="Lee de la hoja 'Base, boletín SGB' el Título, Tono y Subtema de las notas de los "
+                            help="Lee de la hoja 'Base, boletín SGB' el TÍTULO, IMPACTO (tono) y TEMA (subtema) de las notas de los "
                                  "boletines recientes (FECHA INFORME / HORA B, últimos días). Si una nota del "
                                  "dossier es la misma o muy parecida, retoma el tono y el subtema que dejaste "
                                  "en la hoja; las demás se clasifican con las reglas de siempre. Las filas con "

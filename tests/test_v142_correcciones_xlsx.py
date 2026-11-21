@@ -117,3 +117,37 @@ def test_fecha_boletin():
     assert mc._fecha_boletin('2026-11-21', '6:00 p.m.') == '2026-11-21T18:00:00'
     assert mc._fecha_boletin('21/11/2026', '1:00 p.m.') == '2026-11-21T13:00:00'
     assert mc._fecha_boletin('', '1:00 p.m.') == ''
+
+
+def test_columnas_reales_de_la_hoja():
+    from datetime import datetime
+    hoy = datetime.now().strftime('%d/%m/%Y')
+    cab = ['ID', 'FECHA', 'NOMBRE DE MEDIO', 'REGIÓN', 'TIPO DE MEDIO', 'SECCIÓN', 'TÍTULO',
+           ' CARACTERES ', 'CPE', ' AUDIENCIA ', ' TIER ', 'IMPACTO', 'TEMA', 'TIPO', 'GÉNERO',
+           'ENLACE', 'FECHA INFORME', 'HORA B']
+    def fila(i, tit, imp, tema):
+        return [str(i), hoy, 'El Tiempo', 'Bogotá', 'Web', 'Bogotá', tit, '1200', '0', '0', '1',
+                imp, tema, 'Gestión', 'Noticia', 'http://x', hoy, '1:00 p.m.']
+    filas = [fila(1, 'Galán presentó las obras de ampliación de la autopista Norte a 12 carriles',
+                  'Positivo', 'Ampliación de la autopista Norte'),
+             fila(2, 'Otra nota', 'No aplica', 'No aplica'),
+             fila(3, 'Nota duplicada', 'Duplicada', '')]
+    corr = mc.correcciones_de_tabla(cab, filas)
+    assert len(corr) == 1 and corr[0]['tono'] == 'Positivo'
+    assert corr[0]['subtema'] == 'Ampliación de la autopista Norte'
+    # Dossier nuevo: titular casi igual en otro medio => toma el TEMA y el IMPACTO de la hoja;
+    # una nota distinta conserva lo que le dieron las reglas.
+    rows = [{'Título': 'Galán presentó obras de ampliación de la autopista Norte a 12 carriles',
+             'Tono_IA': 'Neutro', 'Subtema_IA': 'Obras autopista'},
+            {'Título': 'Nuevo colegio en Bosa abre sus puertas', 'Tono_IA': 'Positivo',
+             'Subtema_IA': 'Colegio en Bosa'}]
+    az.anclar_subtemas_previos(rows, KM, mc.fusionar_correcciones([], corr))
+    assert (rows[0]['Subtema_IA'], rows[0]['Tono_IA']) == ('Ampliación de la autopista Norte', 'Positivo')
+    assert (rows[1]['Subtema_IA'], rows[1]['Tono_IA']) == ('Colegio en Bosa', 'Positivo')
+
+
+def test_titular_en_mayusculas_en_la_hoja():
+    corr = mc.correcciones_de_tabla(
+        ['TÍTULO', 'IMPACTO', 'TEMA'],
+        [['GALÁN PRESENTÓ LAS OBRAS DE AMPLIACIÓN DE LA AUTOPISTA NORTE', 'Positivo', 'Autopista Norte']])
+    assert mc.buscar_subtema(corr, 'Galán presentó obras de ampliación de la autopista Norte') == 'Autopista Norte'
