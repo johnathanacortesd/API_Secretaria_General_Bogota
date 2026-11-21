@@ -151,3 +151,46 @@ def test_titular_en_mayusculas_en_la_hoja():
         ['TÍTULO', 'IMPACTO', 'TEMA'],
         [['GALÁN PRESENTÓ LAS OBRAS DE AMPLIACIÓN DE LA AUTOPISTA NORTE', 'Positivo', 'Autopista Norte']])
     assert mc.buscar_subtema(corr, 'Galán presentó obras de ampliación de la autopista Norte') == 'Autopista Norte'
+
+
+def test_precision_referencia_hoja():
+    """v1.42: la referencia de la hoja solo se usa para la misma noticia."""
+    ref = mc.correcciones_de_tabla(['TÍTULO', 'IMPACTO', 'TEMA'], [
+        ['Galán presentó obras de ampliación de la autopista Norte', 'Positivo',
+         'Ampliación de la autopista Norte'],
+        ['Mención Alcaldía de Bogotá', 'Neutro', 'Racionamiento de agua'],
+        ['Accidente en la avenida Boyacá deja 2 muertos', 'Neutro', 'Accidente en la avenida Boyacá'],
+        ['Metro de Bogotá', 'Positivo', 'Metro de Bogotá'],
+        # Mismo titular genérico con dos subtemas en el mismo boletín: ambiguo.
+        ['Bogotá al día con las noticias de la mañana', 'Neutro', 'Racionamiento de agua'],
+        ['Bogotá al día con las noticias de la mañana', 'Neutro', 'Pico y placa'],
+    ])
+    ent = mc.fusionar_correcciones([], ref)
+    rows = [
+        {'Título': 'Galán presentó obras de ampliación de la autopista Norte', 'Tono_IA': 'Neutro', 'Subtema_IA': 'Obras viales'},
+        {'Título': 'Comunidad critica cierre de vía por obras en la calle 13', 'Tono_IA': 'Negativo', 'Subtema_IA': 'Obras viales'},
+        {'Título': 'Mención Alcaldía de Bogotá', 'Tono_IA': 'Neutro', 'Subtema_IA': 'Pico y placa'},
+        {'Título': 'Accidente en la avenida Boyacá deja 5 muertos', 'Tono_IA': 'Neutro', 'Subtema_IA': 'Choque múltiple en la Boyacá'},
+        {'Título': 'Metro de Bogotá', 'Tono_IA': 'Negativo', 'Subtema_IA': 'Retrasos del metro'},
+        {'Título': 'Bogotá al día con las noticias de la mañana', 'Tono_IA': 'Neutro', 'Subtema_IA': 'Movilidad'},
+    ]
+    az.anclar_subtemas_previos(rows, KM, ent, mapa={i: i + 1 for i in range(len(rows))})
+    got = [(r['Subtema_IA'], r['Tono_IA']) for r in rows]
+    assert got == [('Ampliación de la autopista Norte', 'Positivo'),   # misma noticia
+                   ('Obras viales', 'Negativo'),                       # otra noticia: sin contagio
+                   ('Pico y placa', 'Neutro'),                         # titular genérico
+                   ('Choque múltiple en la Boyacá', 'Neutro'),         # cifras distintas
+                   ('Retrasos del metro', 'Negativo'),                 # titular genérico
+                   ('Movilidad', 'Neutro')]                            # ambiguo en la hoja
+
+
+def test_titular_generico_vale_si_el_texto_coincide(tmp_path):
+    # Con texto (memoria propia o xlsx con texto), un titular genérico sí
+    # vale si el comienzo del texto es el mismo: es la misma nota.
+    txt = ('El alcalde Carlos Fernando Galán anunció que desde el lunes comenzará el '
+           'racionamiento de agua por turnos en nueve localidades de la ciudad, por la baja '
+           'de los embalses de Chingaza.')
+    ent = [dict(mc._entrada('Mención Alcaldía de Bogotá', txt, 'Racionamiento de agua'), manual=True)]
+    rows = [{'Título': 'Mención Alcaldía de Bogotá', 'CuerpoEs': txt, 'Tono_IA': 'Neutro', 'Subtema_IA': 'x'}]
+    az.anclar_subtemas_previos(rows, KM, ent)
+    assert rows[0]['Subtema_IA'] == 'Racionamiento de agua'

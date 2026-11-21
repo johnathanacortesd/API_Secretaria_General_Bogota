@@ -106,6 +106,7 @@ DIAS_MANUAL = 10         # v1.42: correcciones manuales (xlsx corregido)
 MAX_SUBTEMAS = 6000
 UMBRAL_TITULO = 0.80     # Jaccard de palabras de contenido del titular
 UMBRAL_TEXTO = 0.70      # Jaccard de 3-gramas del comienzo del texto
+MIN_PAL_TITULO = 4       # v1.42: palabras de contenido para comparar titulares
 
 _VACIAS = set("""a al ante con contra de del desde el en entre es fue ha han hay la las le les lo
 los mas no o para pero por que se sin sobre su sus un una uno unos unas y ya este esta estos
@@ -126,6 +127,10 @@ def _propios(titulo: str) -> set:
     misma noticia."""
     toks = re.findall(r"[A-Za-zÁÉÍÓÚÑáéíóúñü]+", str(titulo or ""))
     return {_n(w) for w in toks[1:] if w[:1].isupper() and len(w) >= 3} - _VACIAS
+
+
+def _cifras(titulo: str) -> set:
+    return set(re.findall(r"\d+", _n(titulo)))
 
 
 def _en_mayusculas(titulo: str) -> bool:
@@ -194,19 +199,28 @@ def buscar_entrada(entradas: list, titulo: str, texto: str = "") -> Optional[dic
     if not tn:
         return None
     c, p, g = _contenido(titulo), _propios(titulo), _gramas(texto)
+    cifras = _cifras(titulo)
     mejor, mejor_s = None, 0.0
     for e in entradas:
         et = e.get("titulo") or ""
-        if _n(et) == tn:
-            return e
         s = 0.0
         ec = _contenido(et)
-        # Un titular en MAYÚSCULAS no dice cuáles son nombres propios.
-        mismos_propios = _propios(et) == p or _en_mayusculas(et) or _en_mayusculas(titulo)
-        if len(c) >= 4 and len(ec) >= 4 and mismos_propios:
-            jt = _jac(c, ec)
-            if jt >= UMBRAL_TITULO:
-                s = jt
+        # v1.42 (precisión): el titular solo sirve de referencia si es
+        # informativo (4+ palabras de contenido; «Metro de Bogotá» o
+        # «Mención Alcaldía de Bogotá», típicos de radio y TV, no dicen de
+        # qué trata la nota) y si las cifras coinciden («deja 2 muertos» no
+        # es «deja 5 muertos»). Un titular genérico solo vale si además el
+        # comienzo del texto es el mismo (abajo).
+        if len(c) >= MIN_PAL_TITULO and len(ec) >= MIN_PAL_TITULO \
+                and _cifras(et) == cifras:
+            if _n(et) == tn:
+                return e
+            # Un titular en MAYÚSCULAS no dice cuáles son nombres propios.
+            mismos_propios = _propios(et) == p or _en_mayusculas(et) or _en_mayusculas(titulo)
+            if mismos_propios:
+                jt = _jac(c, ec)
+                if jt >= UMBRAL_TITULO:
+                    s = jt
         if g and e.get("texto"):
             jg = _jac(g, _gramas(e["texto"]))
             if jg >= UMBRAL_TEXTO and len(g) >= 15:
@@ -375,6 +389,7 @@ def correcciones_de_tabla(cabecera, filas, ahora: Optional[str] = None) -> list:
     ahora = ahora or datetime.now().isoformat(timespec="seconds")
     limite = (datetime.now() - timedelta(days=DIAS_MANUAL)).isoformat(timespec="seconds")
     por_tit: Dict[str, dict] = {}
+    subtemas_por_tit: Dict[str, set] = {}
     for fila in filas:
         fila = list(fila or [])
         get = (lambda i: _celda(fila[i]) if i is not None and i < len(fila) else "")
@@ -396,9 +411,15 @@ def correcciones_de_tabla(cabecera, filas, ahora: Optional[str] = None) -> list:
         e.update(fecha=min(fecha, ahora), manual=True)
         if tono in TONOS:
             e["tono"] = tono
+        subtemas_por_tit.setdefault((k, e["fecha"]), set()).add(_n(sub))
         if k not in por_tit or e["fecha"] >= por_tit[k]["fecha"]:
             por_tit[k] = e
-    return list(por_tit.values())
+    # v1.42 (precisión): un mismo titular con subtemas distintos en el MISMO
+    # boletín (p. ej. un rótulo genérico de radio que se repite para notas
+    # diferentes) no es referencia de nada. Entre boletines distintos no es
+    # ambigüedad: es el subtema afinado, y gana el más reciente.
+    return [e for k, e in por_tit.items()
+            if len(subtemas_por_tit.get((k, e["fecha"]), ())) == 1]
 
 
 def fusionar_correcciones(entradas: list, correcciones: list) -> list:

@@ -9727,7 +9727,7 @@ def enrich_rows_with_ai(
         if _corr:
             _entr = memoria_cliente.fusionar_correcciones(_entr, _corr)
             _ULTIMO_RESUMEN['correcciones_sheets_leidas'] = len(_corr)
-        _ancl = anclar_subtemas_previos(rows, km, _entr)
+        _ancl = anclar_subtemas_previos(rows, km, _entr, mapa=mapa)
         _ULTIMO_RESUMEN['subtemas_de_corridas_previas'] = _ancl
     # v1.41: el alcalde o un vocero reivindica una gestión concreta =>
     # Positivo (perfil del Distrito). Antes de los subtemas políticos, que
@@ -11501,45 +11501,66 @@ def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict
     return out
 
 
-def anclar_subtemas_previos(rows: List[dict], km: dict, entradas: list) -> int:
-    """v1.37: una noticia igual o muy parecida a una ya vista en una corrida
-    anterior (memoria de subtemas del boletín) conserva aquel Subtema_IA.
-    Se decide por noticia: todas las filas que en esta corrida comparten
-    subtema heredan el previo si las que coinciden con la memoria apuntan a
-    uno solo. Devuelve cuántas filas cambiaron."""
+def anclar_subtemas_previos(rows: List[dict], km: dict, entradas: list,
+                            mapa: Optional[dict] = None) -> int:
+    """v1.37/v1.42: una noticia igual o muy parecida a una ya vista (memoria
+    de subtemas del boletín, xlsx corregido u hoja del boletín) conserva
+    aquel Subtema_IA y, si es corrección manual con tono, también el tono.
+
+    Precisión (v1.42): solo cambian las filas que coinciden con la
+    referencia y las de su MISMA noticia en esta corrida (mismo grupo de
+    `mapa` o mismo titular). Ya no se contagia a todas las filas que solo
+    comparten el subtema automático: «Comunidad critica cierre de vía en la
+    calle 13» no hereda «Ampliación de la autopista Norte» por haber caído
+    bajo «Obras viales». Las demás notas conservan el subtema que les dieron
+    las reglas. Devuelve cuántas filas cambiaron."""
     import memoria_cliente
     if not entradas:
         return 0
-    previo: Dict[int, str] = {}
+    previo: Dict[int, dict] = {}
     for i, row in enumerate(rows):
         if row.get('is_duplicate'):
             continue
         ent = memoria_cliente.buscar_entrada(entradas, _titulo_fila(row, km), _texto_fila(row, km))
         if ent:
-            previo[i] = ent['subtema']
-            if ent.get('manual'):
-                row['_correccion_manual'] = True
-            # v1.42: corrección manual del xlsx: también manda el tono.
-            if ent.get('manual') and ent.get('tono') in ('Positivo', 'Neutro', 'Negativo'):
-                row['Tono_IA'] = ent['tono']
-                row['_tono_manual'] = True
+            previo[i] = ent
     if not previo:
         return 0
-    por_sub: Dict[str, List[int]] = defaultdict(list)
+    # Misma noticia en esta corrida: mismo grupo o mismo titular.
+    por_noticia: Dict[str, List[int]] = defaultdict(list)
     for i, row in enumerate(rows):
-        if not row.get('is_duplicate'):
-            por_sub[nz(str(row.get('Subtema_IA') or ''))].append(i)
-    cambios = 0
-    for clave_s, idxs in por_sub.items():
-        vistos = {previo[i] for i in idxs if i in previo}
+        if row.get('is_duplicate'):
+            continue
+        gid = (mapa or {}).get(i)
+        clave_n = ('g:%s' % gid) if gid is not None else ('t:' + nz(_titulo_fila(row, km)))
+        por_noticia[clave_n].append(i)
+    destino: Dict[int, dict] = {}
+    for idxs in por_noticia.values():
+        vistos = {}
+        for i in idxs:
+            if i in previo:
+                vistos[nz(previo[i]['subtema'])] = previo[i]
         if not vistos:
             continue
-        destino = {i: next(iter(vistos)) for i in idxs} if (len(vistos) == 1 and clave_s) \
-            else {i: previo[i] for i in idxs if i in previo}
-        for i, sp in destino.items():
-            if str(rows[i].get('Subtema_IA') or '') != sp:
-                rows[i]['Subtema_IA'] = sp
-                cambios += 1
+        if len(vistos) == 1:
+            ent = next(iter(vistos.values()))
+            for i in idxs:
+                destino[i] = previo.get(i, ent)
+        else:
+            for i in idxs:
+                if i in previo:
+                    destino[i] = previo[i]
+    cambios = 0
+    for i, ent in destino.items():
+        row = rows[i]
+        if str(row.get('Subtema_IA') or '') != ent['subtema']:
+            row['Subtema_IA'] = ent['subtema']
+            cambios += 1
+        if ent.get('manual'):
+            row['_correccion_manual'] = True
+            if ent.get('tono') in ('Positivo', 'Neutro', 'Negativo'):
+                row['Tono_IA'] = ent['tono']
+                row['_tono_manual'] = True
     return cambios
 
 
