@@ -1055,6 +1055,65 @@ def construir_grupos(
     return grupos, mapa
 
 
+def fusionar_grupos_por_noticia(rows: List[dict], grupos: List[dict], mapa: Dict[int, int],
+                                km: dict, brand: str = '', aliases: Sequence[str] = (),
+                                voceros: Sequence[str] = ()) -> Tuple[List[dict], Dict[int, int], int]:
+    """v1.46: antes de clasificar, une los grupos que son la MISMA noticia
+    por su CuerpoEs (y título y Contexto analizado): mismo texto, texto muy
+    parecido (TF-IDF) o pasajes literales compartidos, con el veto de lugar
+    o persona distinta de `conflicto_entre_bloques`. Es la evidencia de
+    `noticias_por_evidencia`, que antes solo corría al final, cuando el
+    modelo ya había escrito un subtema distinto para cada pedazo de la misma
+    noticia (17 notas de la «Alerta Fase 1» en varios grupos con rótulos
+    distintos). Así el modelo ve la noticia completa una sola vez y le da un
+    solo subtema. Devuelve (grupos, mapa, grupos_fusionados)."""
+    if len(grupos) < 2:
+        return grupos, mapa, 0
+    noticias = noticias_por_evidencia(rows, mapa, {}, km, brand, aliases, voceros)
+    por_gid = {g['grupo']: g for g in grupos}
+    par = {g['grupo']: g['grupo'] for g in grupos}
+
+    def raiz(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    for n in noticias:
+        gids = list(dict.fromkeys(mapa[i] for i in n if i in mapa))
+        for g in gids[1:]:
+            a, b = raiz(gids[0]), raiz(g)
+            if a != b:
+                par[max(a, b)] = min(a, b)
+    bloques = defaultdict(list)
+    for g in grupos:
+        bloques[raiz(g['grupo'])].append(por_gid[g['grupo']])
+    fusionados = sum(len(v) - 1 for v in bloques.values())
+    if not fusionados:
+        return grupos, mapa, 0
+    nuevos: List[dict] = []
+    for partes in bloques.values():
+        if len(partes) == 1:
+            nuevos.append(dict(partes[0]))
+            continue
+        idxs = sorted(i for g in partes for i in g.get('idxs', []))
+        reps = Counter(sq(_titulo_fila(rows[i], km)) for i in idxs)
+        rep = reps.most_common(1)[0][0]
+        alt = [t for t, _c in reps.most_common() if t and t != rep][:5]
+        cuerpo = max((str(g.get('texto') or '') for g in partes), key=len)
+        contexto = '\n\n'.join(dict.fromkeys(
+            x.strip() for g in partes for x in str(g.get('contexto') or '').split('\n\n') if x.strip()))
+        nuevos.append({'grupo': 0, 'n': len(idxs), 'idxs': idxs, 'titulo': rep,
+                       'titulos_alt': alt, 'texto': cuerpo[:9000], 'contexto': contexto[:9000]})
+    nuevos.sort(key=lambda g: (-len(g['idxs']), min(g['idxs'])))
+    mapa_n: Dict[int, int] = {}
+    for gid, g in enumerate(nuevos, 1):
+        g['grupo'] = gid
+        for i in g['idxs']:
+            mapa_n[i] = gid
+    return nuevos, mapa_n, fusionados
+
+
 # ============================================================================
 # 3. Validador de etiquetas
 # ============================================================================
@@ -9269,6 +9328,12 @@ def enrich_rows_with_ai(
         rows, km, umbral_titulo, umbral_cuerpo,
         estricta=bool(cfg.get('agrupacion_estricta')),
         excluir_similitud=tokens_marca(brand, aliases, cfg.get('voceros') or []))
+    # v1.46: la misma noticia (CuerpoEs igual o muy parecido) en un solo
+    # grupo antes de clasificar, también con agrupación estricta.
+    if cfg.get('agrupar_por_cuerpo', True):
+        grupos, mapa, _fus = fusionar_grupos_por_noticia(
+            rows, grupos, mapa, km, brand, aliases, cfg.get('voceros') or [])
+        _ULTIMO_RESUMEN['grupos_fusionados_por_cuerpo'] = _fus
     for g in grupos:
         contexto = [str(rows[i].get('Contexto analizado') or '') for i in g.get('idxs', [])]
         g['contexto_marca'] = '\n\n'.join(dict.fromkeys(x for x in contexto if x and x != '-'))[:12000]
@@ -9775,13 +9840,8 @@ def enrich_rows_with_ai(
     if cfg.get('memoria_subtemas'):
         import memoria_cliente
         _entr = memoria_cliente.cargar_subtemas(brand, extra)
-        # v1.42: correcciones del analista en la hoja de Google Sheets del
-        # boletín (tono y subtema de las notas ya publicadas).
-        _corr = (extra or {}).get('correcciones_sheets')
-        _corr = _corr if isinstance(_corr, list) else []
-        if _corr:
-            _entr = memoria_cliente.fusionar_correcciones(_entr, _corr)
-            _ULTIMO_RESUMEN['correcciones_sheets_leidas'] = len(_corr)
+        # v1.46: la hoja de Google Sheets solo sirve para saltar los ID ya
+        # analizados; sus tonos y subtemas ya no se retoman.
         _ancl = anclar_subtemas_previos(rows, km, _entr, mapa=mapa, noticias=_noticias_finales)
         _ULTIMO_RESUMEN['subtemas_de_corridas_previas'] = _ancl
     # v1.41: el alcalde o un vocero reivindica una gestión concreta =>

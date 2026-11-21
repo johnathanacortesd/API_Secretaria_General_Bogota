@@ -62,7 +62,7 @@ from pipeline import (process_dossier, leer_columnas_xlsx, sugerir_columna,
                       cargar_ids_analizados_desde_sheets, cargar_hoja_analizadas)
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.45"
+APP_VERSION = "v1.46"
 
 
 def _historial_dir_secreto():
@@ -624,29 +624,21 @@ def run_cleaning_process(df_file, file_meta=None, ai_config=None):
             # puede desactivar el filtro y procesar todo).
             ai_config_efectivo = ai_config
             _excluir = bool(ai_config and ai_config.get("excluir_analizados"))
-            _corr = bool(ai_config and ai_config.get("correcciones_sheets", True))
-            if _excluir or _corr:
+            # v1.46: la hoja solo sirve para saltar los ID ya analizados; ya
+            # no se retoman tono ni subtema desde ella.
+            if _excluir:
                 paint(1, "Leyendo notas ya analizadas (Google Sheets)…")
                 try:
-                    # v1.42: una sola lectura para los IDs y las correcciones.
-                    ids_analizados, correcciones = cargar_hoja_analizadas(con_correcciones=_corr)
+                    ids_analizados, _ = cargar_hoja_analizadas(con_correcciones=False)
                 except ErrorSheetsAnalizadas as exc:
-                    if _excluir:
-                        status_widget.update(
-                            label="No se pudo leer la hoja de notas ya analizadas",
-                            state="error")
-                        st.error(f"⚠️ {exc}")
-                        return
-                    st.warning(f"⚠️ No se tomaron las correcciones de la hoja: {exc}")
-                    ids_analizados, correcciones = None, []
+                    status_widget.update(
+                        label="No se pudo leer la hoja de notas ya analizadas",
+                        state="error")
+                    st.error(f"⚠️ {exc}")
+                    return
                 ai_config_efectivo = dict(ai_config)
-                if _excluir:
-                    ai_config_efectivo["ids_analizados"] = ids_analizados
-                if correcciones:
-                    ai_config_efectivo["correcciones_sheets"] = correcciones
-                    paint(1, f"Correcciones de la hoja (boletines recientes): {len(correcciones)} notas")
-                else:
-                    ai_config_efectivo.pop("correcciones_sheets", None)
+                ai_config_efectivo["ids_analizados"] = ids_analizados
+                ai_config_efectivo.pop("correcciones_sheets", None)
             result = process_dossier(
                 df_file,
                 region_map,
@@ -946,16 +938,6 @@ def main():
                                  "leer, el proceso se detiene; desmarca esta opción para "
                                  "procesar todas las notas de todas formas.",
                         )
-                        correcciones_sheets_chk = st.checkbox(
-                            "Retomar tono y subtema corregidos en la hoja (Google Sheets)",
-                            value=True,
-                            help="Lee de la hoja 'Base, boletín SGB' el TÍTULO, IMPACTO (tono) y TEMA (subtema) de las notas de los "
-                                 "boletines recientes (FECHA INFORME / HORA B, últimos días). Si una nota del "
-                                 "dossier es la misma o muy parecida, retoma el tono y el subtema que dejaste "
-                                 "en la hoja; las demás se clasifican con las reglas de siempre. Las filas con "
-                                 "'No aplica', 'Duplicada' o sin tono/subtema no cuentan. Corrige la hoja y "
-                                 "la próxima corrida lo toma.",
-                        )
 
                     with st.expander("⚙ Ajustes finos del análisis (opcional)"):
                         ca, cb, cc, cd = st.columns(4)
@@ -1158,7 +1140,6 @@ def main():
                                     "incluir_prominencia": bool(prominencia_chk),
                                     "memoria": bool(memoria_chk),
                                     "excluir_analizados": bool(excluir_analizados_chk),
-                                    "correcciones_sheets": bool(correcciones_sheets_chk),
                                     "permitir_cubos_nuevos": True,
                                     "tam_lote": int(tam_lote_input),
                                     "workers": int(workers_input),
@@ -1276,11 +1257,6 @@ def main():
                          "las notas que NO están en la hoja. Si la hoja no se puede "
                          "leer, el proceso se detiene; desmarca esta opción para "
                          "procesar todas las notas de todas formas.")
-                correcciones_sheets_c = st.checkbox(
-                    "Retomar tono y subtema corregidos en la hoja (Google Sheets)",
-                    value=True, key="correcciones_sheets_custom",
-                    help="Igual que en la pestaña estándar: la misma noticia o una muy parecida "
-                         "retoma el tono y el subtema de la hoja 'Base, boletín SGB'.")
 
                 with st.expander("⚙ Ajustes finos del análisis (opcional)"):
                     cca, ccb, ccc, ccd = st.columns(4)
@@ -1405,8 +1381,6 @@ def main():
                         if st.session_state.get("pending_ai_config"):
                             st.session_state["pending_ai_config"]["tono_neutro_titulo"] = list(
                                 st.session_state.get("_perfil_tono_neutro_titulo") or [])
-                            st.session_state["pending_ai_config"]["correcciones_sheets"] = bool(
-                                correcciones_sheets_c)
                             st.session_state["pending_ai_config"]["subtemas_politicos"] = dict(
                                 st.session_state.get("_perfil_subtemas_politicos") or {})
                         st.session_state["procesando"] = True

@@ -5,6 +5,28 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.46 — La misma noticia, un solo grupo antes de clasificar; Sheets solo para los ID (2026-11-21)
+
+- **Agrupación por CuerpoEs antes del modelo** (`fusionar_grupos_por_noticia`):
+  después de `construir_grupos`, los grupos que son la misma noticia se unen.
+  La evidencia es la de `noticias_por_evidencia`, que antes solo corría al
+  final: mismo CuerpoEs, texto muy parecido (TF-IDF, sin la marca) y pasajes
+  literales compartidos. Se conservan sus guardas: el veto de lugar o
+  persona distinta y que el pie fijo de un medio no une notas.
+  - Aplica también con agrupación estricta. Antes el modelo recibía la misma
+    noticia partida en varios grupos y escribía un subtema distinto para cada
+    pedazo; ahora ve todos sus titulares juntos (hasta 6) y escribe un solo
+    subtema.
+  - Con las 52 notas del 21 de noviembre (texto parcial): las noticias del
+    revisado partidas en varios grupos bajan de 5 a 2, sin mezclar noticias
+    distintas.
+  - Se apaga con `agrupar_por_cuerpo: false` en el perfil.
+- **Google Sheets solo para los ID ya analizados**: la app ya no lee de la
+  hoja el tono ni el subtema corregidos (se quitó la casilla «Retomar tono y
+  subtema corregidos en la hoja»), y el analizador ignora esas correcciones
+  aunque lleguen. La casilla «Excluir notas ya analizadas» sigue igual.
+- Pruebas: `tests/test_v146_agrupar_por_cuerpo.py`.
+
 ### v1.45 — Gestiones, anuncios y respuestas con acción del Distrito = Positivo (2026-11-21)
 
 Criterio del usuario: muchas acciones, gestiones, ayudas y programas de la
