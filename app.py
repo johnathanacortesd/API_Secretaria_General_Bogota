@@ -868,7 +868,7 @@ def main():
                     f1 = st.file_uploader("Dossier", type=["xlsx"], label_visibility="collapsed", key="f1")
 
                     st.markdown('<div class="sec-label">2. Configuración de Análisis IA (Tono, Tema, Subtema)</div>', unsafe_allow_html=True)
-                    enable_ai = st.checkbox("Activar análisis reputacional con IA + Jev para el tono", value=True)
+                    enable_ai = st.checkbox("Activar análisis reputacional con IA (tono, subtema y tema)", value=True)
             
                     c_brand, c_alias = st.columns(2)
                     with c_brand:
@@ -1215,7 +1215,7 @@ def main():
                                 help="Esta columna se usará como «Resumen - Aclaracion» (CuerpoEs) en el análisis.")
 
                 st.markdown('<div class="sec-label">2. Configuración del análisis (igual que la pestaña estándar)</div>', unsafe_allow_html=True)
-                enable_ai_c = st.checkbox("Activar análisis reputacional con IA + Jev para el tono",
+                enable_ai_c = st.checkbox("Activar análisis reputacional con IA (tono, subtema y tema)",
                                           value=True, key="enable_ai_custom")
                 cc_brand, cc_alias = st.columns(2)
                 with cc_brand:

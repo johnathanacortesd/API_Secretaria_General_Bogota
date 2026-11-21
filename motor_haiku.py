@@ -874,6 +874,7 @@ Ejemplos (cliente: una alcaldía):
 - "La Alcaldía entregó ayudas a 120 familias afectadas por las lluvias" -> rol gestion, Positivo (atención concreta del problema).
 - "'En nuestra administración logramos destrabar el proyecto; hoy presentamos las obras que permitirán ampliar la autopista Norte de seis a 12 carriles', señaló el alcalde" -> rol gestion, Positivo (el alcalde reivindica una gestión concreta, aunque comparta el crédito con el presidente).
 - "El expresidente Gustavo Petro, cuando era alcalde de Bogotá, propuso un metro subterráneo" -> rol referencial, Neutro (Petro como exalcalde no es el cliente).
+- "Un periodista pidió explicaciones al alcalde por un corte de luz en Teusaquillo; la nota no trae respuesta de la Alcaldía" -> rol critica, Negativo (reclamo dirigido al cliente, sin su respuesta).
 - "El alcalde anunció que revisará el contrato tras las denuncias de sobrecostos" -> rol equilibrada, Neutro.
 guardar_clasificacion RECHAZA la fila si el rol y el tono no coinciden.
 Si el pedido trae un bloque <criterio_tono>, ese criterio del cliente MANDA en los casos que nombre: usa el tono que indique y el rol que corresponde a ese tono.
