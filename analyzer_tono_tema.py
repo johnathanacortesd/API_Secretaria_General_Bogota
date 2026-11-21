@@ -9797,6 +9797,14 @@ def enrich_rows_with_ai(
                                            voceros=cfg.get('voceros') or [], mapa=mapa)
         if _gv:
             _ULTIMO_RESUMEN['tono_gestion_vocero'] = len(_gv)
+        # v1.45: gestión, anuncio o respuesta con acción del Distrito o de
+        # sus entidades adscritas => Positivo (medidas y alertas, Neutro).
+        _gd = aplicar_gestion_distrito_final(rows, km, brand, aliases,
+                                             voceros=cfg.get('voceros') or [],
+                                             noticias=_noticias_finales,
+                                             terminos_neutros=cfg.get('tono_neutro_titulo') or [])
+        if _gd:
+            _ULTIMO_RESUMEN['tono_gestion_distrito'] = len(_gd)
     # v1.37: subtemas políticos fijos del perfil (aspirantes a la Alcaldía,
     # Petro como alcalde): mandan sobre todo lo anterior, memoria incluida.
     _pol_fijos = aplicar_subtemas_politicos(
@@ -10636,6 +10644,204 @@ def aplicar_gestion_vocero_final(rows: List[dict], km: dict, brand: str, aliases
     for i in sube:
         rows[i]['Tono_IA'] = 'Positivo'
     return sorted(sube)
+
+
+# ============================================================================
+# v1.45 (criterio del usuario 2026-11-21): acciones, gestiones, ayudas,
+# programas, anuncios y respuestas CON ACCIÓN de la Alcaldía, el alcalde, la
+# Secretaría General o las entidades adscritas del Distrito = Positivo.
+# - Anuncio de programa, convocatoria, inscripciones, becas, subsidio,
+#   descuento, feria, festival u obra que empieza = Positivo aunque aún no
+#   se haya entregado.
+# - Respuesta con acción («ante las quejas, Movilidad instaló semáforos /
+#   abrió investigación / envió cuadrillas») = Positivo; si solo reconoce,
+#   explica o pide paciencia sigue Neutro («Galán reconoce afectaciones al
+#   cronograma del metro»).
+# - Medidas, alertas y restricciones (Alerta Fase 1, pico y placa, cierres,
+#   prohibiciones, decretos, operativos de espacio público) siguen Neutro.
+# Calibrado con 431 titulares revisados a mano (13-21 nov 2026).
+# ============================================================================
+_GESTION_DISTRITO_PAT = re.compile(
+    r'\b(?:entreg(?:a|o|an|aron|ara|aran|ando)|inaugur\w*|habilit\w*|lanz(?:a|o|an|aron|ara|ara)|'
+    r'pone en marcha|puso en marcha|pondra en marcha|ponen en marcha|abre sus puertas|'
+    r'construy\w*|construira|remodel\w*|renov(?:o|ara|aran|ado|ada)|recuper(?:a|o|an|aron|ara)|'
+    r'benefici(?:a|o|an|aron|ara|aran|ado|ados|adas)|invert(?:ira|iran)|invierte|invirtio|invirtieron|'
+    r'adjudic\w*|cofinanci\w*|financiar(?:a|an)|otorg\w*|ofrec(?:e|en|io|era|eran)|brind\w*|'
+    r'ampliara|ampliaran|amplian|amplio|ampliaron|instal(?:a|o|an|aron|ara)|repar(?:a|o|aron|ara)|'
+    r'restablec\w*|rehabilit\w*|sembr\w*|siembra|rescat\w*|captur(?:a|o|an|aron)|incaut\w*|'
+    r'desarticul\w*|desmont\w*|atend(?:io|ieron|era)|atiende|acompan(?:a|o|an|aron)|'
+    r'apoy(?:a|o|an|aron|ara)|impuls(?:a|o|an|aron|ara)|promuev\w*|promovio|'
+    r'firm(?:o|aron|a|an) (?:un |el |la )?(?:convenio|acuerdo|alianza|contrato)|'
+    r'(?:inicia|inicio|iniciaron|inician|arranca|arranco|arrancan|arrancaron|comienza|comienzan|'
+    r'comenzo|comenzaron|empieza|empiezan|empezo)\s+(?:la\s+|las\s+|el\s+|los\s+)?'
+    r'(?:obras?|construccion|ampliacion|intervencion|recuperacion|programa|jornada|entrega)|'
+    r'recibir(?:a|an) (?:su |sus )?(?:vivienda|subsidio|beca|ayuda|apoyo)\w*|'
+    r'avanz(?:a|an) (?:la |el |las |los )?(?:obra|construccion|ampliacion)|'
+    r'alcanz\w* (?:un |el )?\d+ ?(?:%|por ciento) de avance|finaliz\w* (?:el |la )?(?:izaje|obra|construccion)|'
+    r'hace (?:un )?llamado|invita a|'
+    r'dieron inicio|dio inicio|da inicio|conect(?:o|a|aron|an)|implement(?:a|o|ara|aran)|'
+    r'fortalec(?:e|io|era)|agiliz\w*|recibieron (?:las )?llaves|ya tiene \d+|'
+    r'\d+ (?:km|kilometros) de (?:viaducto|rieles|lineas)|avanza con|'
+    r'complet(?:o|a|aron) \d+|capturad[oa]s|capturan|desmantel\w*|golpe (?:a|contra) (?:la |una )?'
+    r'(?:estructura|banda|red)|gan(?:o|a) (?:el )?(?:premio|reconocimiento)|'
+    r'obtiene (?:el )?(?:premio|reconocimiento)|recib(?:e|io) (?:el )?(?:premio|reconocimiento)|'
+    r'destacad[oa] como|aportar(?:a|an)|pondra \d|llevar(?:a|an) \d+ (?:proyectos|iniciativas)|'
+    r'subio \d+ ?%|propone (?:un )?(?:historico )?aumento)\b')
+_ANUNCIO_DISTRITO_PAT = re.compile(
+    r'\b(?:anunci\w*|present\w*|abre|abrio|abren|abrira|convoc\w*|tendra|tendran|llega|llegan|'
+    r'llegara|reunira|reunio|realiza|realizara|realizo|celebra|celebrara|organiza|organizo|habra|lanza|'
+    r'regresa|acoge|acogera|vivio|se suma|se toman)\b')
+_BENEFICIO_DISTRITO_PAT = re.compile(
+    r'\b(?:convocatorias?|inscripcion(?:es)?|becas?|cupos|subsidios?|descuentos?|beneficios?|'
+    r'programas?|plan(?:es)?|ferias?|festival(?:es)?|jornadas?|bazar(?:es)?|ruta|rutas|talleres?|'
+    r'cursos?|empleos?|vacantes|viviendas?|obras?|proyectos?|centro|parques?|colegios?|jardin(?:es)?|'
+    r'servicios?|ayudas?|apoyos?|mercados?|kits?|estrategia|campana|conciertos?|agenda|'
+    r'oportunidades|alivio|gratis|gratuit\w*|mercados? campesinos?|espacios|foro|eventos?|'
+    r'iniciativas|iluminacion|temporada|asistentes)\b')
+# Respuesta CON acción: el Distrito ya hizo algo frente al problema.
+_RESPUESTA_ACCION_PAT = re.compile(
+    r'\b(?:instal(?:o|aron)|envi(?:o|aron)|despleg(?:o|aron)|dispus(?:o|ieron)|repar(?:o|aron)|'
+    r'restablec(?:io|ieron)|atend(?:io|ieron)|interv(?:ino|inieron)|sancion(?:o|aron)|'
+    r'suspendi(?:o|eron) (?:al |el |la |a )?(?:contratista|contrato|operador)|'
+    r'abri(?:o|eron) (?:una )?investigacion|inici(?:o|aron) (?:una )?investigacion|'
+    r'entreg(?:o|aron) (?:ayudas|mercados|kits|apoyos|subsidios)|activ(?:o|aron) (?:un |el )?plan de '
+    r'(?:atencion|contingencia|apoyo)|reubic(?:o|aron)|evacu(?:o|aron)|rescat(?:o|aron)|'
+    r'captur(?:o|aron)|recuper(?:o|aron))\b')
+# Medidas, alertas y restricciones: Neutro (criterio del usuario).
+_MEDIDA_NEUTRA_PAT = re.compile(
+    r'\b(?:alertas?|restriccion\w*|restring\w*|pico y placa|cierres?|cierra|cerrad[oa]s?|'
+    r'prohib\w*|decretos?|resolucion|ley seca|toque de queda|parrillero|comparendos?|'
+    r'operativos? de (?:control|espacio publico|recuperacion del espacio publico)|'
+    r'espacio publico|desalojo|sellamiento|cortes? de (?:luz|agua|energia)|racionamiento|'
+    r'medidas (?:de ahorro|restrictivas|de movilidad|para ingresar)|plan retorno|'
+    r'calidad del aire|contaminacion)\b')
+
+
+def _actor_distrito_en(oracion_nz: str, det) -> bool:
+    """El cliente (marca, alias, vocero, Alcaldía, Distrito o entidad
+    adscrita) aparece en la oración, o «Bogotá» es el sujeto del titular."""
+    if det is not None and det.menciones(oracion_nz):
+        return True
+    # «Bogotá tendrá…», «Bogotá recupera…»: Bogotá como sujeto de un verbo
+    # en las primeras palabras (no «Bogotá Gourmet 2026…», nombre de evento).
+    m = re.match(r'\W*(?:la\s+)?(?:bogota|el distrito|distrito|alcaldia)\s+((?:\S+\s*){1,4})', oracion_nz)
+    return bool(m and (_GESTION_DISTRITO_PAT.search(m.group(1)) or _ANUNCIO_DISTRITO_PAT.search(m.group(1))))
+
+
+_FUENTE_SOLO_PAT = re.compile(r'\b(?:segun|de acuerdo con|citad[oa] por|inform[oa]cion (?:de|proporcionada por))\b')
+_OTRA_CIUDAD_CACHE = []
+
+
+def _titular_de_otra_ciudad(tit_nz: str) -> bool:
+    """El titular sitúa la nota en otra ciudad o departamento y no nombra
+    a Bogotá («Militarizar Villavicencio…»)."""
+    if not _OTRA_CIUDAD_CACHE:
+        import contexto_cliente as _cc
+        _OTRA_CIUDAD_CACHE.append(re.compile(r'\b(?:%s)\b' % _cc._OTROS_LUGARES))
+        # «avenida Boyacá», «la Boyacá», «autopista Sur»: vías de Bogotá.
+        _OTRA_CIUDAD_CACHE.append(re.compile(
+            r'\b(?:avenida|av|la|troncal|autopista|calle|carrera|ak|ac)\s+(?:%s)\b' % _cc._OTROS_LUGARES))
+    t = _OTRA_CIUDAD_CACHE[1].sub(' ', tit_nz)
+    return bool(_OTRA_CIUDAD_CACHE[0].search(t)) and not re.search(r'\bbogota\b', t)
+
+
+def gestion_distrito_positiva(titulo: str, texto: str = '', det=None,
+                              terminos_neutros: Sequence[str] = (),
+                              voceros: Sequence[str] = ()) -> bool:
+    """True si la nota cuenta una gestión, un anuncio de beneficio o una
+    respuesta con acción del Distrito (ver bloque v1.45). `texto` es el
+    Contexto analizado (los segmentos donde aparece el cliente). `det` es un
+    contexto_cliente.Detector; sin él, el actor se infiere del titular."""
+    tit = nz(titulo or '')
+    if not tit:
+        return False
+    if _MEDIDA_NEUTRA_PAT.search(tit) or _NOTICIA_PROTOCOLO_PAT.search(tit):
+        return False
+    if _alcaldia_de_otra_ciudad(tit) or _titular_de_otra_ciudad(tit):
+        return False
+    # Figura ajena en el titular (perfil `tono_neutro_titulo`, p. ej. Petro)
+    # sin un vocero propio: la nota trata de esa figura (regla de siempre).
+    propios = [nz(v) for v in (voceros or []) if v and str(v)[:1].isupper() and len(nz(v)) >= 4]
+    if any(re.search(r'\b' + re.escape(nz(t)) + r'\b', tit) for t in (terminos_neutros or ()) if nz(t)) \
+            and not any(re.search(r'\b' + re.escape(p) + r'\b', tit) for p in propios):
+        return False
+    # Hecho adverso en el titular («avanza, pero tendrá retrasos»): solo
+    # sube una respuesta con acción.
+    adverso = bool(_ADVERSO_PAT.search(tit) or _ADMITE_PAT.search(tit))
+    oraciones = [tit] + [nz(o) for o in re.split(r'(?<=[.;!?])\s+|\n+|\s\[…\]\s', ctrl(texto or ''))
+                         if o.strip()]
+    # El titular sin el cliente cuenta solo si el cuerpo trae al cliente en
+    # una oración de gestión o beneficio (no un restaurante privado que
+    # «ofrece menús»). Sin detector (solo titular) el actor es implícito.
+    respaldo_cuerpo = det is None or _actor_distrito_en(tit, det) or any(
+        _actor_distrito_en(o, det) and (_GESTION_DISTRITO_PAT.search(o) or _BENEFICIO_DISTRITO_PAT.search(o))
+        for o in oraciones[1:])
+    for k, o in enumerate(oraciones):
+        if not o or (k > 0 and (_MEDIDA_NEUTRA_PAT.search(o) or _NOTICIA_PROTOCOLO_PAT.search(o))):
+            continue
+        if any(s in o for s in _DISTRITO_CORRUPCION_STEMS):
+            return False
+        if k == 0 and not respaldo_cuerpo:
+            continue
+        # En el cuerpo el actor debe estar en la oración, y no solo como
+        # fuente del dato («según la información de la Alcaldía…»).
+        if k > 0 and (not _actor_distrito_en(o, det) or _FUENTE_SOLO_PAT.search(o)):
+            continue
+        if adverso:
+            if _RESPUESTA_ACCION_PAT.search(o) and (k > 0 or _actor_distrito_en(o, det)):
+                return True
+            continue
+        if _GESTION_DISTRITO_PAT.search(o):
+            return True
+        if _ANUNCIO_DISTRITO_PAT.search(o) and _BENEFICIO_DISTRITO_PAT.search(o):
+            return True
+    return False
+
+
+def aplicar_gestion_distrito_final(rows: List[dict], km: dict, brand: str, aliases=(),
+                                   voceros=(), noticias: Optional[Sequence[Sequence[int]]] = None,
+                                   terminos_neutros: Sequence[str] = ()) -> List[int]:
+    """v1.45: pase FINAL (perfil del Distrito). Una nota Neutro cuyo titular
+    o Contexto analizado cuenta una gestión, un anuncio de beneficio o una
+    respuesta con acción del cliente o de una entidad adscrita (ver
+    gestion_distrito_positiva) pasa a Positivo. No toca: duplicadas, notas
+    políticas fijas, tono manual, opinión, ni notas con crítica dirigida al
+    cliente sin respuesta con acción. Con `noticias`, las demás filas Neutro
+    de la misma noticia suben con ella. Devuelve las filas cambiadas."""
+    import contexto_cliente as _cc
+    det = _cc.Detector(brand, aliases, voceros, distrito=True)
+    blancos = _con_voceros(aliases, voceros)
+
+    def _apta(row):
+        if row.get('is_duplicate') or row.get('_subtema_politico') or row.get('_tono_manual'):
+            return False
+        if str(row.get('Tono_IA') or '') != 'Neutro':
+            return False
+        return not (str(row.get('TIPO') or '') == 'Opinión de terceros'
+                    or str(row.get('GÉNERO') or '') in ('Opinión', 'Editorial', 'Columna'))
+
+    sube = []
+    for i, row in enumerate(rows):
+        if not _apta(row):
+            continue
+        tit = _titulo_fila(row, km)
+        ctx = str(row.get('Contexto analizado') or '').strip(' -') or _texto_fila(row, km)[:1500]
+        if not gestion_distrito_positiva(tit, ctx, det=det, terminos_neutros=terminos_neutros,
+                                         voceros=voceros):
+            continue
+        completo = '%s. %s' % (tit, ctx)
+        if _marca_blanco_de_critica(completo, brand, blancos) \
+                and not _RESPUESTA_ACCION_PAT.search(nz(completo)):
+            continue
+        sube.append(i)
+    elegidas = set(sube)
+    for n in (noticias or ()):
+        if any(i in elegidas for i in n):
+            sube += [i for i in n if i not in elegidas and 0 <= i < len(rows) and _apta(rows[i])]
+            elegidas.update(n)
+    for i in sube:
+        rows[i]['Tono_IA'] = 'Positivo'
+    return sorted(set(sube))
 
 
 # Titular con «Bogotá» o el Distrito como sujeto de una gestión («Bogotá

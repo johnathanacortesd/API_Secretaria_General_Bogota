@@ -5,6 +5,48 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.45 — Gestiones, anuncios y respuestas con acción del Distrito = Positivo (2026-11-21)
+
+Criterio del usuario: muchas acciones, gestiones, ayudas y programas de la
+Alcaldía y de sus entidades adscritas quedaban Neutro.
+
+- **Instrucciones del modelo** (`RUBRICA_TONO`, ejemplos y `criterio_custom`
+  del perfil). Lo que cambia:
+  - El rol *gestion* incluye el **anuncio** de un programa, una convocatoria,
+    becas, un subsidio, un descuento, una feria, un festival o una obra que
+    inicia, aunque aún no se haya entregado.
+  - También cuentan los operativos con resultados (capturas, incautaciones),
+    los llamados ciudadanos y la gestión de las **entidades adscritas** (IDU,
+    TransMilenio, Empresa Metro, IDRD, IDIGER, alcaldías locales…).
+  - **Respuesta con acción** (instaló, envió cuadrillas, reparó, sancionó,
+    abrió investigación, entregó ayudas) = Positivo. Solo reconocer, explicar
+    o pedir paciencia sigue Neutro («Galán reconoce afectaciones al cronograma
+    del metro»).
+  - Las **medidas, alertas y restricciones** siguen Neutro: Alerta Fase 1,
+    pico y placa, cierres, decretos, plan de ahorro con prohibiciones,
+    operativos de control o de espacio público.
+  - Ante duda entre Positivo y Neutro, si el Distrito ejecuta, entrega o
+    anuncia algo a favor de la gente, gana Positivo.
+- **Pase final determinista** (`aplicar_gestion_distrito_final` /
+  `gestion_distrito_positiva`): una nota Neutro cuyo titular o Contexto
+  analizado cuenta una gestión, un anuncio con beneficio o una respuesta con
+  acción del cliente o de una entidad adscrita pasa a Positivo, junto con las
+  demás filas de la misma noticia.
+  - No sube: notas de Petro o de aspirantes, opinión, tono manual, otra ciudad,
+    el Distrito citado solo como fuente («según la Alcaldía…»), privados
+    (restaurantes que «ofrecen menús») ni críticas dirigidas sin acción.
+  - Corre después de la regla del vocero y antes de los subtemas políticos,
+    que siguen mandando.
+- **Calibración** con 431 titulares revisados a mano entre el 13 y el 21 de
+  noviembre (`tests/data/tono_titulares_revisados_2026-11.csv`). Con solo el
+  titular, la regla sube 139 notas y 131 son Positivas en la revisión (94 %);
+  ningún Negativo. Los 8 restantes son anuncios que la revisión dejó Neutro
+  (bazares, Jóvenes a la E, Mi Casa en Bogotá) y que con el nuevo criterio
+  son Positivos.
+- La memoria de clasificaciones se renueva sola: el criterio del perfil
+  cambió, y con él su huella.
+- Pruebas: `tests/test_v145_tono_gestion_distrito.py`.
+
 ### v1.44 — La misma noticia, un solo subtema (2026-11-21)
 
 Revisión humana del boletín del 21 de noviembre (52 notas, 17 corregidas).
