@@ -9285,6 +9285,7 @@ def enrich_rows_with_ai(
     _ULTIMO_RESUMEN.pop('memoria', None)
     _ULTIMO_RESUMEN.pop('subtemas_politicos', None)
     _ULTIMO_RESUMEN.pop('tono_gestion_vocero', None)
+    _ULTIMO_RESUMEN.pop('subtemas_misma_nota_unidos', None)
     _ULTIMO_RESUMEN.pop('tono_reclamo_sin_respuesta_filas', None)
     _ULTIMO_RESUMEN.pop('tono_reclamo_sin_respuesta', None)
     _ULTIMO_RESUMEN.pop('correcciones_sheets_leidas', None)
@@ -9760,6 +9761,14 @@ def enrich_rows_with_ai(
                              if isinstance(r, dict)],
         salida_noticias=_noticias_finales)
     _ULTIMO_RESUMEN['unificacion_por_noticia'] = _por_noticia
+    # v1.46: la misma nota (impreso y web del mismo medio, o reproducida)
+    # por pasaje compartido del Contexto analizado.
+    _fijos_rot = [(r or {}).get('subtema') for r in (cfg.get('subtemas_fijos') or [])
+                  if isinstance(r, dict)]
+    _misma = unificar_misma_nota_final(rows, km, fijos=_fijos_rot,
+                                       salida_noticias=_noticias_finales)
+    if _misma:
+        _ULTIMO_RESUMEN['subtemas_misma_nota_unidos'] = _misma
     if _eval_dec:
         # Clausifier: las decisiones del evaluador mandan sobre todas las
         # unificaciones deterministas anteriores (por grupo y por fila).
@@ -9812,6 +9821,12 @@ def enrich_rows_with_ai(
         con_tipo=bool(cfg.get('clasificar_tipo_genero')), noticias=_noticias_finales)
     if _pol_fijos['aspirantes'] or _pol_fijos['petro']:
         _ULTIMO_RESUMEN['subtemas_politicos'] = {k: _pol_fijos[k] for k in ('aspirantes', 'petro')}
+    # v1.46: otra vez la misma nota, ahora con las correcciones de la hoja y
+    # los subtemas políticos ya puestos (mandan sobre su «gemela»).
+    _misma2 = unificar_misma_nota_final(rows, km, fijos=_fijos_rot)
+    if _misma2:
+        _ULTIMO_RESUMEN['subtemas_misma_nota_unidos'] = \
+            _ULTIMO_RESUMEN.get('subtemas_misma_nota_unidos', 0) + _misma2
     # v1.44: mismo rótulo con otras mayúsculas = un solo subtema; sin el
     # «en Bogotá» final en el perfil del Distrito.
     _formas = unificar_forma_subtemas(
@@ -11972,6 +11987,112 @@ def _fijar_subtema_politico(row: dict, rotulo: str, clave_r: str, con_tipo: bool
     # v1.39: marca para que las reglas de GÉNERO/TIPO posteriores
     # (opinión por URL/Sección) no cambien el TIPO.
     row['_subtema_politico'] = clave_r
+
+
+# ============================================================================
+# v1.46 (regla del cliente: notas iguales o similares => mismo subtema):
+# la MISMA nota publicada en la edición impresa y en la web del mismo medio
+# («Vanguardia» / «Vanguardia.com»), con otro titular y otro arranque, pero
+# con el mismo pasaje del cliente palabra por palabra («En Colombia,
+# organismos como la Defensoría del Pueblo advierten que alrededor de 2,5
+# millones de personas…»). Los pases anteriores comparaban titular y el
+# COMIENZO del texto; este compara pasajes compartidos del Contexto analizado.
+# ============================================================================
+_SUFIJOS_MEDIO = re.compile(r'(?:\s*(?:\.|punto)\s*(?:com|co|net|org|tv|info|news))+$')
+SHINGLE_MISMA_NOTA = 6        # palabras por fragmento
+MIN_COMPARTIDOS_MISMO_MEDIO = 12   # ≈ 17 palabras seguidas en común
+MIN_COMPARTIDOS_OTRO_MEDIO = 30    # ≈ 35 palabras seguidas en común
+MAX_DF_FRAGMENTO = 6          # fragmentos en más notas: plantilla del medio
+
+
+def familia_medio(medio: str) -> str:
+    """«Vanguardia», «Vanguardia.com», «www.vanguardia.com» => «vanguardia»."""
+    m = str(medio or '').strip().lower()
+    m = re.sub(r'^(?:https?://)?(?:www\.)?', '', m)
+    m = _SUFIJOS_MEDIO.sub('', m)
+    return re.sub(r'[^a-z0-9ñ]+', '', nz(m))
+
+
+def _fragmentos_misma_nota(row: dict, km: dict) -> set:
+    c = str(row.get('Contexto analizado') or '').strip()
+    if not c or c == '-':
+        c = str(row.get(km.get('resumen', 'Resumen - Aclaracion')) or row.get('Resumen - Aclaracion') or '')
+    w = nz(c).split()
+    k = SHINGLE_MISMA_NOTA
+    return {' '.join(w[i:i + k]) for i in range(max(0, len(w) - k + 1))}
+
+
+def unificar_misma_nota_final(rows: List[dict], km: dict, fijos=(),
+                              salida_noticias: Optional[list] = None) -> int:
+    """Une el subtema de filas que son la MISMA nota por pasaje compartido:
+    ≥ MIN_COMPARTIDOS_MISMO_MEDIO fragmentos de 6 palabras en común si son
+    del mismo medio (impreso y web), ≥ MIN_COMPARTIDOS_OTRO_MEDIO si son de
+    medios distintos (la misma nota reproducida). Los fragmentos que
+    aparecen en muchas notas (plantillas) no cuentan. El rótulo común es,
+    en este orden: el de una corrección manual o regla política, un rótulo
+    fijo del perfil, el de más notas y, en empate, el de la nota con más
+    texto. Solo cambia el subtema. Devuelve cuántas filas cambiaron."""
+    idx = [i for i, r in enumerate(rows) if not r.get('is_duplicate')
+           and str(r.get('Subtema_IA') or '').strip() not in ('', '-')]
+    if len(idx) < 2:
+        return 0
+    frag = {i: _fragmentos_misma_nota(rows[i], km) for i in idx}
+    df = Counter(f for i in idx for f in frag[i])
+    frag = {i: {f for f in fs if df[f] <= MAX_DF_FRAGMENTO} for i, fs in frag.items()}
+    mk = km.get('medio', 'Medio')
+    fam = {i: familia_medio(rows[i].get(mk) or rows[i].get('Medio')) for i in idx}
+    par = {i: i for i in idx}
+
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+    for a_i, a in enumerate(idx):
+        if not frag[a]:
+            continue
+        for b in idx[a_i + 1:]:
+            if not frag[b] or find(a) == find(b):
+                continue
+            comunes = len(frag[a] & frag[b])
+            umbral = MIN_COMPARTIDOS_MISMO_MEDIO if (fam[a] and fam[a] == fam[b]) \
+                else MIN_COMPARTIDOS_OTRO_MEDIO
+            if comunes >= umbral:
+                par[find(b)] = find(a)
+    comp = defaultdict(list)
+    for i in idx:
+        comp[find(i)].append(i)
+    fijos_n = {nz(f) for f in (fijos or []) if f}
+    if salida_noticias is not None:
+        # v1.46: las gemelas cuentan como la MISMA noticia para los pases
+        # siguientes (memoria y hoja, reglas políticas, tono del Distrito).
+        salida_noticias.extend(sorted(m) for m in comp.values() if len(m) > 1)
+    cambios = 0
+    for miembros in comp.values():
+        labs = {nz(rows[i]['Subtema_IA']) for i in miembros}
+        if len(labs) < 2:
+            continue
+        manual = [i for i in miembros if rows[i].get('_correccion_manual') or rows[i].get('_subtema_politico')]
+        fijo = [i for i in miembros if nz(rows[i]['Subtema_IA']) in fijos_n]
+        if manual:
+            elegido = rows[manual[0]]['Subtema_IA']
+        elif fijo:
+            elegido = rows[fijo[0]]['Subtema_IA']
+        else:
+            peso = Counter(nz(rows[i]['Subtema_IA']) for i in miembros)
+            largo = {}
+            for i in miembros:
+                k = nz(rows[i]['Subtema_IA'])
+                largo[k] = max(largo.get(k, 0), len(str(rows[i].get('Contexto analizado') or '')))
+            mejor = max(peso, key=lambda k: (peso[k], largo[k], k))
+            elegido = next(rows[i]['Subtema_IA'] for i in miembros if nz(rows[i]['Subtema_IA']) == mejor)
+        for i in miembros:
+            if rows[i].get('_correccion_manual') or rows[i].get('_subtema_politico'):
+                continue
+            if rows[i]['Subtema_IA'] != elegido:
+                rows[i]['Subtema_IA'] = elegido
+                cambios += 1
+    return cambios
 
 
 def anclar_subtemas_previos(rows: List[dict], km: dict, entradas: list,
