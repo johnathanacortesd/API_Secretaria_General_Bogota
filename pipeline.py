@@ -1952,11 +1952,14 @@ def process_dossier(
     tiempos: List[dict] = []
     _reloj = [t0]
 
-    def _etapa(nombre: str, sub: Optional[dict] = None) -> None:
+    def _etapa(nombre: str, sub: Optional[dict] = None, siempre: bool = False) -> None:
+        # v1.46: las etapas principales se registran siempre (aunque duren
+        # menos de 0,01 s con un dossier pequeño); las menores, solo si
+        # tardan algo, para no llenar la tabla de ceros.
         ahora = time.time()
         seg = round(ahora - _reloj[0], 2)
         _reloj[0] = ahora
-        if seg >= 0.01 or sub:
+        if seg >= 0.01 or sub or siempre:
             tiempos.append({"etapa": nombre, "segundos": seg})
             for k, v in (sub or {}).items():
                 tiempos.append({"etapa": k, "segundos": round(float(v), 2), "sub": True})
@@ -2024,7 +2027,7 @@ def process_dossier(
     emit_progress(progress, 62, "Detectando duplicados…")
     rows = detectar_duplicados_avanzado(rows_expanded, KEY_MAP)
 
-    _etapa("Lectura, limpieza y duplicados")
+    _etapa("Lectura, limpieza y duplicados", siempre=True)
     has_ai = bool(ai_config and ai_config.get("enabled"))
     # Motor de clasificación: "openai" (actual, por defecto) o "haiku"
     # (agente Claude Haiku, motor_haiku.py). En modo haiku no se cargan PKL
@@ -2205,7 +2208,7 @@ def process_dossier(
 
     _etapa("Prominencia y orden")
     output_data = generate_output_excel(rows, KEY_MAP, progress=export_progress, columns_to_use=cols_to_export)
-    _etapa("Generación del Excel")
+    _etapa("Generación del Excel", siempre=True)
     _conteo_tonos = _contar_tonos(rows)
     _vista = vista_resultado(rows, KEY_MAP) if (has_ai or has_pkl) else []
     del rows, rows_expanded
