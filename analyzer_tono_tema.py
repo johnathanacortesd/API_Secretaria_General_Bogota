@@ -1055,6 +1055,94 @@ def construir_grupos(
     return grupos, mapa
 
 
+SIM_FUSION_GRUPOS = 0.35   # parecido mínimo (coseno TF-IDF) entre dos grupos para unirlos
+
+
+def fusionar_grupos_por_noticia(rows: List[dict], grupos: List[dict], mapa: Dict[int, int],
+                                km: dict, brand: str = '', aliases: Sequence[str] = (),
+                                voceros: Sequence[str] = (),
+                                umbral: float = SIM_FUSION_GRUPOS
+                                ) -> Tuple[List[dict], Dict[int, int], int]:
+    """v1.47 (tomado del PR #24): antes de clasificar, une los grupos que son la MISMA noticia
+    por su CuerpoEs (y título y Contexto analizado): mismo texto, texto muy
+    parecido (TF-IDF) o pasajes literales compartidos, con el veto de lugar
+    o persona distinta de `conflicto_entre_bloques`. Es la evidencia de
+    `noticias_por_evidencia`, que antes solo corría al final, cuando el
+    modelo ya había escrito un subtema distinto para cada pedazo de la misma
+    noticia (17 notas de la «Alerta Fase 1» en varios grupos con rótulos
+    distintos). Así el modelo ve la noticia completa una sola vez y le da un
+    solo subtema. Devuelve (grupos, mapa, grupos_fusionados)."""
+    if len(grupos) < 2:
+        return grupos, mapa, 0
+    noticias = noticias_por_evidencia(rows, mapa, {}, km, brand, aliases, voceros)
+    por_gid = {g['grupo']: g for g in grupos}
+    par = {g['grupo']: g['grupo'] for g in grupos}
+
+    def raiz(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    # Dentro de cada noticia, dos grupos se unen solo si alguna nota de uno
+    # se parece de verdad (texto completo) a alguna del otro: una frase
+    # literal compartida o una cadena de parecidos no basta antes de
+    # clasificar («Embalses se alejan del 80 %» no es el plan de ahorro de
+    # la Alcaldía; el reclamo de Hollman Morris por un corte de luz no es el
+    # aviso de cortes programados de Enel).
+    import numpy as np
+    filas_n = sorted({i for n in noticias if len({mapa.get(j) for j in n}) > 1 for i in n})
+    S = pos = None
+    if filas_n:
+        S = matriz_similitud(
+            [texto_noticia(_titulo_fila(rows[i], km), _texto_fila(rows[i], km),
+                           str(rows[i].get('Contexto analizado') or '').strip(' -')) for i in filas_n],
+            excluir=tokens_marca(brand, aliases, voceros))
+        pos = {i: k for k, i in enumerate(filas_n)}
+    for n in noticias:
+        gids = list(dict.fromkeys(mapa[i] for i in n if i in mapa))
+        if len(gids) < 2:
+            continue
+        miembros = defaultdict(list)
+        for i in n:
+            if i in mapa:
+                miembros[mapa[i]].append(pos[i])
+        for x in range(len(gids)):
+            for y in range(x + 1, len(gids)):
+                a, b = raiz(gids[x]), raiz(gids[y])
+                if a == b:
+                    continue
+                if float(S[np.ix_(miembros[gids[x]], miembros[gids[y]])].max()) >= umbral:
+                    par[max(a, b)] = min(a, b)
+    bloques = defaultdict(list)
+    for g in grupos:
+        bloques[raiz(g['grupo'])].append(por_gid[g['grupo']])
+    fusionados = sum(len(v) - 1 for v in bloques.values())
+    if not fusionados:
+        return grupos, mapa, 0
+    nuevos: List[dict] = []
+    for partes in bloques.values():
+        if len(partes) == 1:
+            nuevos.append(dict(partes[0]))
+            continue
+        idxs = sorted(i for g in partes for i in g.get('idxs', []))
+        reps = Counter(sq(_titulo_fila(rows[i], km)) for i in idxs)
+        rep = reps.most_common(1)[0][0]
+        alt = [t for t, _c in reps.most_common() if t and t != rep][:5]
+        cuerpo = max((str(g.get('texto') or '') for g in partes), key=len)
+        contexto = '\n\n'.join(dict.fromkeys(
+            x.strip() for g in partes for x in str(g.get('contexto') or '').split('\n\n') if x.strip()))
+        nuevos.append({'grupo': 0, 'n': len(idxs), 'idxs': idxs, 'titulo': rep,
+                       'titulos_alt': alt, 'texto': cuerpo[:9000], 'contexto': contexto[:9000]})
+    nuevos.sort(key=lambda g: (-len(g['idxs']), min(g['idxs'])))
+    mapa_n: Dict[int, int] = {}
+    for gid, g in enumerate(nuevos, 1):
+        g['grupo'] = gid
+        for i in g['idxs']:
+            mapa_n[i] = gid
+    return nuevos, mapa_n, fusionados
+
+
 # ============================================================================
 # 3. Validador de etiquetas
 # ============================================================================
@@ -9269,6 +9357,12 @@ def enrich_rows_with_ai(
         rows, km, umbral_titulo, umbral_cuerpo,
         estricta=bool(cfg.get('agrupacion_estricta')),
         excluir_similitud=tokens_marca(brand, aliases, cfg.get('voceros') or []))
+    # v1.47 (del PR #24): la misma noticia (CuerpoEs igual o muy parecido) en
+    # un solo grupo antes de clasificar, también con agrupación estricta.
+    if cfg.get('agrupar_por_cuerpo', True):
+        grupos, mapa, _fus = fusionar_grupos_por_noticia(
+            rows, grupos, mapa, km, brand, aliases, cfg.get('voceros') or [])
+        _ULTIMO_RESUMEN['grupos_fusionados_por_cuerpo'] = _fus
     for g in grupos:
         contexto = [str(rows[i].get('Contexto analizado') or '') for i in g.get('idxs', [])]
         g['contexto_marca'] = '\n\n'.join(dict.fromkeys(x for x in contexto if x and x != '-'))[:12000]
