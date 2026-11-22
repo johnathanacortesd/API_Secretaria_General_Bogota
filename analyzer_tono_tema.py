@@ -9202,6 +9202,10 @@ def guarda_final_forma_subtema(rows: List[dict], km: dict,
         s = str(row.get('Subtema_IA') or '').strip()
         if row.get('is_duplicate') or not s or s == '-':
             continue
+        # v1.48: los rótulos políticos fijos (Entorno Gustavo Petro,
+        # Aspirantes) y las correcciones del analista no se reparan.
+        if row.get('_subtema_politico') or row.get('_correccion_manual'):
+            continue
         tit = _titulo_fila(row, km)
         otros = [t for t in titulos_por_sub.get(s, []) if t != tit]
         if not _malo(s, tit) and not any(_malo(s, t) for t in otros):
@@ -9912,7 +9916,8 @@ def enrich_rows_with_ai(
     # Petro como alcalde): mandan sobre todo lo anterior, memoria incluida.
     _pol_fijos = aplicar_subtemas_politicos(
         rows, km, cfg.get('subtemas_politicos'), voceros=cfg.get('voceros') or [],
-        con_tipo=bool(cfg.get('clasificar_tipo_genero')), noticias=_noticias_finales)
+        con_tipo=bool(cfg.get('clasificar_tipo_genero')), noticias=_noticias_finales,
+        det=det_cliente)
     if _pol_fijos['aspirantes'] or _pol_fijos['petro']:
         _ULTIMO_RESUMEN['subtemas_politicos'] = {k: _pol_fijos[k] for k in ('aspirantes', 'petro')}
     # v1.46: otra vez la misma nota, ahora con las correcciones de la hoja y
@@ -12002,9 +12007,74 @@ def es_nota_petro_alcalde_contexto(titulo: str, contexto: str) -> bool:
     return False
 
 
+# v1.48 (2026-11-22, regla del cliente: «Petro y su alcaldía = Neutro,
+# Entorno Gustavo Petro e Información general»): el pasaje de su época de
+# alcalde suele estar en medio del cuerpo («En diciembre de 2013 […] Ordóñez
+# destituyó e inhabilitó por quince años al entonces alcalde de Bogotá,
+# Gustavo Petro»), fuera de la entrada (600 caracteres) y a veces fuera del
+# Contexto analizado, y el titular puede no nombrar a Petro («Los
+# procuradores que…»). Se lee TODO el cuerpo: si la Alcaldía solo aparece
+# por la época de Petro (cada oración que menciona al cliente es de esa
+# época, y el titular no nombra al cliente ni a un vocero propio), la nota
+# es «Entorno Gustavo Petro».
+_RX_PETRO_EPOCA_EXTRA = re.compile(
+    r'\balcalde\s+(?:mayor\s+)?(?:de\s+bogota\s+)?(?:gustavo\s+(?:francisco\s+)?)?petro\b'
+    r'|\bpetro\b.{0,80}\b(?:destitu\w*|inhabilit\w*|restitu\w*)\b'
+    r'|\b(?:destitu\w*|inhabilit\w*|restitu\w*)\b.{0,80}\bpetro\b')
+
+
+def _oracion_epoca_petro(o: str) -> bool:
+    """Oración (normalizada) que sitúa a Petro como alcalde de Bogotá."""
+    if not o or not re.search(r'\b(?:petro|alcald\w*|exalcalde|bogota humana|palacio lievano)\b', o):
+        return False
+    if _alcaldia_de_otra_ciudad(o):
+        return False
+    if _RX_PETRO_EPOCA.search(o):
+        return True
+    if _RX_ALCALDE_PASADO.search(o) and _RX_PETRO_REFERIDO.search(o):
+        return True
+    if re.search(r'\bpetro\b', o) and (_RX_PETRO_DISTRITO.search(o)
+                                       or (_RX_PETRO_EPOCA_EXTRA.search(o)
+                                           and re.search(r'\balcald\w*|\bbogota\b', o))):
+        return True
+    return False
+
+
+def es_nota_petro_alcalde_cuerpo(titulo: str, texto: str, det=None, voceros=()) -> bool:
+    """v1.48: la Alcaldía aparece en la nota SOLO por la época de Petro como
+    alcalde. Lee todo el cuerpo: al menos una oración de esa época y ninguna
+    otra oración con una mención del cliente (Alcaldía, alcalde, voceros,
+    entidades del Distrito). No vale si el titular nombra al cliente o a un
+    vocero propio fuera de esa época, ni si trata de otra ciudad."""
+    import contexto_cliente as _cc
+    t = nz(titulo)
+    if not texto or _alcaldia_de_otra_ciudad(t):
+        return False
+    propios = [nz(v) for v in (voceros or [])
+               if v and str(v)[:1].isupper() and len(nz(v)) >= 4]
+    if any(re.search(r'\b' + re.escape(p) + r'\b', t) for p in propios):
+        return False
+    if det is not None and det.activo() and det.menciones(titulo) \
+            and not _oracion_epoca_petro(t):
+        return False
+    oraciones = _cc.partir_oraciones(str(texto))
+    epoca = 0
+    for crudo in oraciones:
+        o = nz(crudo)
+        if _oracion_epoca_petro(o):
+            epoca += 1
+            continue
+        menciona = det.menciones(crudo) if det is not None and det.activo() else \
+            re.search(r'\balcald(?:ia|e|esa)\b|\bdistrit\w*', o)
+        if menciona:
+            return False
+    return epoca > 0
+
+
 def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict],
                                voceros=(), con_tipo: bool = True,
-                               noticias: Optional[Sequence[Sequence[int]]] = None) -> dict:
+                               noticias: Optional[Sequence[Sequence[int]]] = None,
+                               det=None) -> dict:
     """Fija Subtema_IA, Tono_IA (Neutro) y TIPO (Información general) en las
     notas de aspirantes a la Alcaldía y de Petro como alcalde. `reglas` es el
     campo `subtemas_politicos` del perfil: {"aspirantes": rótulo, "petro":
@@ -12033,7 +12103,9 @@ def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict
         ctx_fila = str(row.get('Contexto analizado') or '').strip(' -')
         rotulo = ''
         if sub_pet and (es_nota_petro_alcalde(tit, hecho, voceros=voceros)
-                        or es_nota_petro_alcalde_contexto(tit, ctx_fila)):
+                        or es_nota_petro_alcalde_contexto(tit, ctx_fila)
+                        or es_nota_petro_alcalde_cuerpo(tit, _texto_fila(row, km),
+                                                        det=det, voceros=voceros)):
             rotulo, clave_r = sub_pet, 'petro'
         elif sub_asp and es_nota_aspirantes_alcaldia(tit, hecho, voceros=voceros):
             rotulo, clave_r = sub_asp, 'aspirantes'

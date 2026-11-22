@@ -5,6 +5,28 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.48 — Petro y su alcaldía, también en medio del cuerpo (2026-11-22)
+
+Regla del cliente: las notas sobre Petro como alcalde van siempre como
+**«Entorno Gustavo Petro», Neutro, Información general**. Caso real: una nota
+sobre procuradores cuyo único pasaje con la Alcaldía es «En diciembre de 2013
+[…] Ordóñez destituyó e inhabilitó por quince años al entonces alcalde de
+Bogotá, Gustavo Petro […]». Ese pasaje estaba lejos de la entrada (la regla
+solo leía 600 caracteres y el Contexto analizado) y el titular no siempre
+nombra a Petro, así que la nota salía con otro subtema.
+
+- **`es_nota_petro_alcalde_cuerpo`** (dentro de `aplicar_subtemas_politicos`):
+  lee todo el cuerpo. Si hay al menos una oración de la época de Petro como
+  alcalde («el entonces alcalde de Bogotá, Gustavo Petro», «cuando Petro era
+  alcalde», «Ordóñez destituyó a Petro», «Bogotá Humana»…) y ninguna otra
+  oración menciona al cliente (Alcaldía, alcalde Galán, voceros, entidades
+  del Distrito), la nota es «Entorno Gustavo Petro».
+- No aplica si el titular nombra a Galán, al secretario general o a la
+  Alcaldía actual, ni si la Alcaldía aparece en otra oración por una gestión
+  propia («la Alcaldía de Bogotá respondió…»).
+- La reparación final de forma de subtemas ya no toca los rótulos políticos
+  fijos ni las correcciones del analista.
+
 ### v1.45 — Gestiones, anuncios y respuestas con acción del Distrito = Positivo (2026-11-21)
 
 Criterio del usuario: muchas acciones, gestiones, ayudas y programas de la
