@@ -850,7 +850,7 @@ def main():
                 if _haiku:
                     st.caption("Claude Haiku: Tono, Subtema y Tema los clasifica un agente Claude Haiku "
                                "con un revisor de consistencia. Se factura a la clave de Claude Platform "
-                               "(ANTHROPIC_API_KEY). Sin PKL ni Jev; modelo, lotes, paralelo y "
+                               "(ANTHROPIC_API_KEY). Sin PKL; modelo, lotes, paralelo y "
                                "verificaciones no aplican.")
                 with st.form("main_form"):
                     st.markdown('<div class="sec-label">1. Sube el archivo de entrada</div>', unsafe_allow_html=True)
