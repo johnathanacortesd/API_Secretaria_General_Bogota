@@ -62,7 +62,7 @@ from pipeline import (process_dossier, leer_columnas_xlsx, sugerir_columna,
                       cargar_ids_analizados_desde_sheets, cargar_hoja_analizadas)
 
 # Versión visible de la app (se muestra en el encabezado). Actualizar en cada release.
-APP_VERSION = "v1.52"
+APP_VERSION = "v1.53"
 
 
 def _historial_dir_secreto():

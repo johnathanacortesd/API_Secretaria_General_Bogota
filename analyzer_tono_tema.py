@@ -9271,6 +9271,156 @@ def guarda_final_forma_subtema(rows: List[dict], km: dict,
     return {'reparados': reparados, 'sobrevivientes': sobrevivientes}
 
 
+_PROBLEMA_CONSTRUCCION = (
+    'el subtema se CONSTRUYE con tus palabras a partir del texto de la nota: frase nominal '
+    'de 3 a 7 palabras de contenido que nombre el hecho concreto (qué pasó, quién o dónde). '
+    'Nunca una sola palabra ni un rótulo genérico («Militarización», «Seguridad»), nunca un '
+    'recorte o extracto del titular («Siglo siendo la casa del Congreso» -> «Centenario del '
+    'Capitolio como sede del Congreso»)')
+
+
+def problemas_subtema_construido(sub: str, titulo: str, permitidos=()) -> List[str]:
+    """v1.53 (regla del usuario 2026-11-25): un subtema es una construcción
+    lógica, coherente y específica hecha a partir del texto, no una palabra
+    suelta («Militarización») ni un extracto del titular («Siglo siendo la
+    casa del Congreso» de «El Capitolio Nacional un siglo siendo la casa del
+    Congreso»). Lista vacía = válido. Quedan exentos los rótulos que impone
+    el perfil (`permitidos`) y el nombre propio de un programa u obra."""
+    import motor_haiku as _mh
+    s = str(sub or '').strip()
+    if not s or s == '-' or _mh._simple(s) in set(permitidos or ()):
+        return []
+    if _es_nombre_de_tema(s) and not _mh.empieza_con_verbo(s):
+        return []
+    p = list(_mh.problemas_subtema(s, titulo or '', ''))
+    if titulo and _subtema_trozo_verbatim(s, titulo) and not any('título' in x for x in p):
+        p.append('extracto literal del título')
+    return p
+
+
+def guarda_final_subtema_construido(rows: List[dict], km: dict, cfg: dict,
+                                    permitidos=(), uso=None, reformular_fn=None) -> dict:
+    """v1.53: ÚLTIMA puerta del subtema antes del Excel y de la memoria.
+
+    Los pases deterministas que vienen tras el etiquetado (respaldo desde el
+    titular, memoria de corridas previas, unificaciones) podían dejar un
+    subtema de una sola palabra o el recorte de las últimas palabras del
+    titular. Aquí ninguno se recorta ni se deriva del titular: se pide al
+    modelo que lo CONSTRUYA a partir del texto de la nota (una llamada por
+    lote, con un reintento que le dice por qué se rechazó su propuesta) y la
+    respuesta pasa el validador de forma y la fidelidad a cada fila. Todas
+    las filas que compartían el rótulo malo reciben el mismo rótulo nuevo
+    (la unificación por noticia se conserva). Sin respuesta válida, se usa el
+    subtema que la fila tenía al volcar si ese sí es válido; lo demás se
+    reporta como sobreviviente. No toca duplicadas, correcciones manuales ni
+    rótulos políticos del perfil."""
+    import motor_haiku as _mh
+    permit = {_mh._simple(x) for x in (permitidos or ()) if str(x or '').strip()}
+    brand = (cfg or {}).get('brand') or ''
+    aliases = (cfg or {}).get('aliases') or []
+    por_sub: Dict[str, List[int]] = defaultdict(list)
+    probs: Dict[str, List[str]] = {}
+    for i, row in enumerate(rows):
+        if row.get('is_duplicate') or row.get('_correccion_manual') or row.get('_subtema_politico'):
+            continue
+        s = str(row.get('Subtema_IA') or '').strip()
+        p = problemas_subtema_construido(s, _titulo_fila(row, km), permit)
+        if p:
+            k = nz(s)
+            por_sub[k].append(i)
+            probs.setdefault(k, p)
+    res = {'detectados': sum(len(v) for v in por_sub.values()), 'reconstruidos': 0,
+           'cambios': [], 'sobrevivientes': [], 'costo_usd': 0.0}
+    if not por_sub:
+        return res
+
+    def _texto(idxs):
+        partes = []
+        for i in idxs[:3]:
+            ctx = str(rows[i].get('Contexto analizado') or '').strip(' -')
+            partes.append(ctx or _texto_fila(rows[i], km))
+        return ' … '.join(p for p in partes if p)[:700]
+
+    def _valido(nuevo, idxs):
+        if not nuevo:
+            return False
+        for i in idxs:
+            tit = _titulo_fila(rows[i], km)
+            if problemas_subtema_construido(nuevo, tit, ()) \
+                    or not _subtema_fiel_a_fila(nuevo, rows[i], km, brand, aliases):
+                return False
+        return True
+
+    claves = list(por_sub)
+    pedido = [{'id': str(n), 'titulo': _titulo_fila(rows[por_sub[k][0]], km),
+               'texto': _texto(por_sub[k]),
+               'sub_tema': str(rows[por_sub[k][0]].get('Subtema_IA') or '').strip(),
+               'problemas': probs[k] + [_PROBLEMA_CONSTRUCCION]}
+              for n, k in enumerate(claves)]
+
+    def _llamar(lote):
+        if reformular_fn is not None:
+            return reformular_fn(lote) or {}
+        if (cfg or {}).get('motor') == 'haiku':
+            out = _mh.reformular_subtemas(lote)
+            res['costo_usd'] += float(_mh.REFORMULACION.get('costo_usd') or 0.0)
+            return out
+        if not (cfg or {}).get('api_key'):
+            return {}
+        out = {}
+        for trozo in [lote[j:j + 12] for j in range(0, len(lote), 12)]:
+            try:
+                txt = llamar_llm(cfg, [{'role': 'system', 'content': prompt_sistema(cfg)},
+                                       {'role': 'user', 'content': prompt_reparacion(
+                                           [dict(f, grupo=int(f['id'])) for f in trozo])}], uso=uso)
+                for fid, v in _normaliza_label(_json_loose(txt), [int(f['id']) for f in trozo]).items():
+                    if v.get('sub_tema'):
+                        out[str(fid)] = v['sub_tema']
+            except Exception:  # noqa: BLE001 - la puerta nunca tumba la corrida
+                continue
+        return out
+
+    nuevos: Dict[str, str] = {}
+    pendientes = pedido
+    for _intento in range(2):
+        if not pendientes:
+            break
+        try:
+            resp = {str(a): str(b or '').strip().rstrip('.') for a, b in (_llamar(pendientes) or {}).items()}
+        except Exception:  # noqa: BLE001
+            resp = {}
+        siguientes = []
+        for f in pendientes:
+            cand = resp.get(f['id'], '')
+            if cand:
+                cand = cand[0].upper() + cand[1:]
+            if _valido(cand, por_sub[claves[int(f['id'])]]):
+                nuevos[f['id']] = cand
+            else:
+                motivo = (problemas_subtema_construido(cand, f['titulo'], ()) or
+                          ['no corresponde al texto de la nota']) if cand else ['sin respuesta']
+                siguientes.append(dict(f, problemas=f['problemas'] + (
+                    ['tu propuesta «%s» se rechazó: %s' % (cand, '; '.join(motivo))] if cand else [])))
+        pendientes = siguientes
+    for n, k in enumerate(claves):
+        idxs = por_sub[k]
+        nuevo = nuevos.get(str(n))
+        if not nuevo:
+            # Respaldo: el subtema de la fila al volcar, si ese sí es una construcción válida.
+            previo = str(rows[idxs[0]].get('_sub_volcado') or '').strip()
+            nuevo = previo if _valido(previo, idxs) else ''
+        if not nuevo:
+            res['sobrevivientes'].extend({'fila': i, 'subtema': rows[i].get('Subtema_IA')} for i in idxs)
+            continue
+        for i in idxs:
+            res['cambios'].append({'fila': i, 'id': rows[i].get(km.get('idnoticia', 'ID Noticia')),
+                                   'quitado': rows[i].get('Subtema_IA'), 'nuevo': nuevo})
+            rows[i]['Subtema_IA'] = nuevo
+            rows[i]['_sub_volcado'] = nuevo
+            res['reconstruidos'] += 1
+    return res
+
+
 def enrich_rows_with_ai(
     rows: List[dict],
     km: dict,
@@ -10006,6 +10156,16 @@ def enrich_rows_with_ai(
         unificar_misma_nota_final(rows, km, fijos=_fijos_rot)
         _restituidos += guarda_final_subtema_fiel(rows, km, brand, aliases)
         _ULTIMO_RESUMEN['subtemas_restituidos_por_fidelidad'] = _restituidos
+    # v1.53: ningún subtema de una o dos palabras sueltas ni extracto del
+    # titular llega al Excel ni a la memoria: se reconstruye desde el texto.
+    _permit_c = list(_fijos_rot) + [str(v) for v in (cfg.get('subtemas_politicos') or {}).values()
+                                    if isinstance(v, str)]
+    if cfg.get('guia_subtema'):
+        import motor_haiku as _mhc
+        _permit_c += list(_mhc.rotulos_permitidos_de(cfg.get('guia_subtema') or ''))
+    _constr = guarda_final_subtema_construido(rows, km, cfg, permitidos=_permit_c, uso=uso)
+    if _constr['detectados']:
+        _ULTIMO_RESUMEN['subtemas_construidos_final'] = _constr
     if cfg.get('memoria_subtemas'):
         guardar_subtemas_corrida(rows, km, brand, extra)
 
@@ -10070,7 +10230,8 @@ def enrich_rows_with_ai(
             'auditor_tono', 'roles', 'agentes', 'reutilizadas')}
         _ref = _ULTIMO_RESUMEN.get('haiku_reformulacion') or {}
         _ULTIMO_RESUMEN['costo_aprox_usd'] = round(
-            _ULTIMO_RESUMEN['costo_aprox_usd'] + float(_ref.get('costo_usd') or 0.0), 4)
+            _ULTIMO_RESUMEN['costo_aprox_usd'] + float(_ref.get('costo_usd') or 0.0)
+            + float((_ULTIMO_RESUMEN.get('subtemas_construidos_final') or {}).get('costo_usd') or 0.0), 4)
         _ULTIMO_RESUMEN['costo_aprox_usd'] = round(
             _ULTIMO_RESUMEN['costo_aprox_usd'] + float(
                 (_ULTIMO_RESUMEN.get('evaluador_agrupacion') or {}).get('costo_usd') or 0.0), 4)

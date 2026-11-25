@@ -1210,6 +1210,11 @@ def _ejecutar(coro):
 PROMPT_REFORMULAR = (
     "Eres editor de subtemas de un monitoreo de medios en español de Colombia. Recibes subtemas "
     "MAL formados con su título, contexto y problemas. Devuelve para cada id un subtema NUEVO.\n"
+    "El subtema NUEVO se CONSTRUYE con tus palabras a partir del contexto: una frase nominal lógica, "
+    "coherente y específica que nombre el hecho concreto de la nota. Nunca una sola palabra ni un "
+    "rótulo genérico (MAL 'Militarización' -> BIEN 'Llamado de Galán a reforzar el orden público'), "
+    "nunca un recorte del título (MAL 'Siglo siendo la casa del Congreso' -> BIEN 'Centenario del "
+    "Capitolio como sede del Congreso').\n"
     + REGLAS_FORMA_REVISOR +
     "Responde SOLO con JSON compacto, sin texto alrededor: "
     '{"resultados":[{"id":"...","subtema":"..."}]}'
