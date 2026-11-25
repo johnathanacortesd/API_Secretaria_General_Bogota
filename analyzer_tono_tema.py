@@ -9426,6 +9426,7 @@ def enrich_rows_with_ai(
     _ULTIMO_RESUMEN.pop('tono_gestion_vocero', None)
     _ULTIMO_RESUMEN.pop('subtemas_misma_nota_unidos', None)
     _ULTIMO_RESUMEN.pop('subtemas_restituidos_por_fidelidad', None)
+    _ULTIMO_RESUMEN.pop('subtemas_entorno_petro', None)
     _ULTIMO_RESUMEN.pop('oraciones_plantilla_medio', None)
     _ULTIMO_RESUMEN.pop('tono_reclamo_sin_respuesta_filas', None)
     _ULTIMO_RESUMEN.pop('tono_reclamo_sin_respuesta', None)
@@ -9991,6 +9992,15 @@ def enrich_rows_with_ai(
     # v1.48: ningún subtema llega al Excel si no corresponde a SU nota. Tras
     # restituir, se vuelve a unir la misma nota (con rótulos fieles) y se
     # coteja otra vez.
+    # v1.51: subtema sobre Petro => Neutro / Entorno político / Información general.
+    # Un perfil guardado antes de v1.51 (con la regla de Petro pero sin la
+    # clave nueva) usa «Entorno político».
+    _sp_cfg = cfg.get('subtemas_politicos') or {}
+    _petro_gen = aplicar_entorno_petro(
+        rows, km, _sp_cfg.get('petro_general') or ('Entorno político' if _sp_cfg.get('petro') else ''),
+        voceros=cfg.get('voceros') or [], con_tipo=bool(cfg.get('clasificar_tipo_genero')))
+    if _petro_gen:
+        _ULTIMO_RESUMEN['subtemas_entorno_petro'] = len(_petro_gen)
     _restituidos = guarda_final_subtema_fiel(rows, km, brand, aliases)
     if _restituidos:
         unificar_misma_nota_final(rows, km, fijos=_fijos_rot)
@@ -10889,7 +10899,8 @@ _GESTION_DISTRITO_PAT = re.compile(
     r'(?:estructura|banda|red)|gan(?:o|a) (?:el )?(?:premio|reconocimiento)|'
     r'obtiene (?:el )?(?:premio|reconocimiento)|recib(?:e|io) (?:el )?(?:premio|reconocimiento)|'
     r'destacad[oa] como|aportar(?:a|an)|pondra \d|llevar(?:a|an) \d+ (?:proyectos|iniciativas)|'
-    r'subio \d+ ?%|propone (?:un )?(?:historico )?aumento)\b')
+    r'subio \d+ ?%|propone (?:un )?(?:historico )?aumento|'
+    r'(?:puso|pusieron|pone|ponen|pondra|pondran) a (?:su )?disposicion)\b')
 _ANUNCIO_DISTRITO_PAT = re.compile(
     r'\b(?:anunci\w*|present\w*|abre|abrio|abren|abrira|convoc\w*|tendra|tendran|llega|llegan|'
     r'llegara|reunira|reunio|realiza|realizara|realizo|celebra|celebrara|organiza|organizo|habra|lanza|'
@@ -10909,7 +10920,11 @@ _RESPUESTA_ACCION_PAT = re.compile(
     r'abri(?:o|eron) (?:una )?investigacion|inici(?:o|aron) (?:una )?investigacion|'
     r'entreg(?:o|aron) (?:ayudas|mercados|kits|apoyos|subsidios)|activ(?:o|aron) (?:un |el )?plan de '
     r'(?:atencion|contingencia|apoyo)|reubic(?:o|aron)|evacu(?:o|aron)|rescat(?:o|aron)|'
-    r'captur(?:o|aron)|recuper(?:o|aron))\b')
+    r'captur(?:o|aron)|recuper(?:o|aron)|'
+    # v1.51: «puso a disposición la red pública hospitalaria».
+    r'(?:puso|pusieron|pone|ponen|pondra|pondran) a (?:su )?disposicion|'
+    r'ofrec(?:io|ieron) (?:la |el |los |las |su |sus )?(?:red|apoyo|ayuda|hospitales|recursos|'
+    r'equipos|maquinaria|bomberos|personal))\b')
 # Medidas, alertas y restricciones: Neutro (criterio del usuario).
 _MEDIDA_NEUTRA_PAT = re.compile(
     r'\b(?:alertas?|restriccion\w*|restring\w*|pico y placa|cierres?|cierra|cerrad[oa]s?|'
@@ -10960,8 +10975,15 @@ def gestion_distrito_positiva(titulo: str, texto: str = '', det=None,
         return False
     if _MEDIDA_NEUTRA_PAT.search(tit) or _NOTICIA_PROTOCOLO_PAT.search(tit):
         return False
-    if _alcaldia_de_otra_ciudad(tit) or _titular_de_otra_ciudad(tit):
+    if _alcaldia_de_otra_ciudad(tit):
         return False
+    # v1.51 (caso «Gobernadores cierran filas con el Meta tras el atentado en
+    # Villavicencio», 2026-11-25): un titular de otra ciudad no basta para
+    # descartar la nota. Solo cuenta el cuerpo, y la oración debe nombrar al
+    # alcalde, la marca o un alias (no la «Alcaldía» suelta, que puede ser la
+    # de esa ciudad): «el alcalde de Bogotá, Carlos Fernando Galán, puso a
+    # disposición la red pública hospitalaria».
+    otra_ciudad = _titular_de_otra_ciudad(tit)
     # Figura ajena en el titular (perfil `tono_neutro_titulo`, p. ej. Petro)
     # sin un vocero propio: la nota trata de esa figura (regla de siempre).
     propios = [nz(v) for v in (voceros or []) if v and str(v)[:1].isupper() and len(nz(v)) >= 4]
@@ -10984,7 +11006,10 @@ def gestion_distrito_positiva(titulo: str, texto: str = '', det=None,
             continue
         if any(s in o for s in _DISTRITO_CORRUPCION_STEMS):
             return False
-        if k == 0 and not respaldo_cuerpo:
+        if k == 0 and (otra_ciudad or not respaldo_cuerpo):
+            continue
+        if otra_ciudad and not (det is not None and any(
+                c in ('vocero', 'marca') for c, _e in det.menciones(o))):
             continue
         # En el cuerpo el actor debe estar en la oración, y no solo como
         # fuente del dato («según la información de la Alcaldía…»).
@@ -12094,6 +12119,40 @@ def es_nota_petro_alcalde_contexto(titulo: str, contexto: str) -> bool:
                 and not _alcaldia_de_otra_ciudad(o):
             return True
     return False
+
+
+def aplicar_entorno_petro(rows: List[dict], km: dict, rotulo: str, voceros=(),
+                          con_tipo: bool = False) -> List[int]:
+    """v1.51 (regla del usuario 2026-11-25): si el subtema FINAL de una nota
+    trata de Gustavo Petro («Defensa de Petro a congresista Estrada»,
+    «Crítica al expresidente Gustavo Petro»), la nota es Neutro, su subtema
+    es `rotulo` (perfil: subtemas_politicos.petro_general, «Entorno
+    político») y su TIPO «Información general». No toca: duplicadas, la
+    corrección manual de la hoja, las notas que ya llevan un rótulo político
+    del perfil (Petro como alcalde, aspirantes) ni las notas donde el
+    subtema o el titular nombran a un vocero del cliente («Galán responde a
+    Petro…»: ahí la noticia es del cliente). Devuelve las filas cambiadas."""
+    rot = str(rotulo or '').strip()
+    if not rot:
+        return []
+    propios = [nz(v) for v in (voceros or []) if v and str(v)[:1].isupper() and len(nz(v)) >= 4]
+    cambios = []
+    for i, row in enumerate(rows):
+        if row.get('is_duplicate') or row.get('_correccion_manual') or row.get('_subtema_politico'):
+            continue
+        sub = nz(row.get('Subtema_IA') or '')
+        if not re.search(r'\bpetro\b', sub):
+            continue
+        tit = nz(_titulo_fila(row, km))
+        if any(re.search(r'\b' + re.escape(p) + r'\b', sub + ' ' + tit) for p in propios):
+            continue
+        row['Subtema_IA'] = rot
+        row['Tono_IA'] = 'Neutro'
+        if con_tipo:
+            row['TIPO'] = 'Información general'
+        row['_subtema_politico'] = 'petro_general'
+        cambios.append(i)
+    return cambios
 
 
 def aplicar_subtemas_politicos(rows: List[dict], km: dict, reglas: Optional[dict],

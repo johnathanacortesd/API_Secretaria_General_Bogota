@@ -157,7 +157,8 @@ def normalizar_perfil(data: dict) -> dict:
                                if str(x).strip()] if isinstance(d.get("tono_neutro_titulo"), list) else []
     _sp = d.get("subtemas_politicos") if isinstance(d.get("subtemas_politicos"), dict) else {}
     d["subtemas_politicos"] = {k: str(_sp.get(k) or "").strip()
-                               for k in ("aspirantes", "petro") if str(_sp.get(k) or "").strip()}
+                               for k in ("aspirantes", "petro", "petro_general")
+                               if str(_sp.get(k) or "").strip()}
     d["tipo_por_actor"] = bool(d["tipo_por_actor"])
     d["formato_boletin"] = bool(d["formato_boletin"])
     # v1.18/v1.14: compatibilidad con perfiles guardados con el modelo
