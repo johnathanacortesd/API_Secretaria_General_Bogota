@@ -5,6 +5,34 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.54 — Todo subtema sobre Petro = «Entorno Gustavo Petro» (2026-11-25)
+
+- El rótulo de los subtemas sobre Petro (`subtemas_politicos.petro_general`)
+  pasa de «Entorno político» a **«Entorno Gustavo Petro»**, el mismo de Petro
+  como alcalde.
+- `aplicar_entorno_petro` ya no exime las filas marcadas como corrección
+  manual: la hoja del boletín de la 1:00 p.m. traía «Crítica al expresidente
+  Gustavo Petro» (nota 62163985) y, leída como corrección, quedaba así en el
+  de las 6. Siguen exentas las notas cuyo subtema o titular nombran a un
+  vocero («Galán responde a Petro…»).
+
+### v1.53 — El subtema se construye desde el texto: nada de palabras sueltas ni extractos del titular (2026-11-25)
+
+- **Guarda final** (`guarda_final_subtema_construido`, la última antes del
+  Excel y de la memoria): un subtema con menos de 3 palabras de contenido
+  («Militarización») o que es extracto del titular («Siglo siendo la casa
+  del Congreso» de «El Capitolio Nacional un siglo siendo la casa del
+  Congreso») se **reconstruye con IA desde el texto de la nota** (Haiku u
+  OpenAI, según el motor), con un reintento que explica por qué se rechazó
+  la propuesta. El nuevo rótulo pasa el validador de forma (3 a 7 palabras,
+  sin verbo inicial, sin copia) y la fidelidad a cada fila; todas las
+  filas que compartían el rótulo malo reciben el mismo. Nunca se recorta el
+  titular. Exentos: correcciones manuales, rótulos políticos del perfil
+  («Entorno político», «Entorno Gustavo Petro»), subtemas fijos y nombres
+  propios de programas u obras. Lo que no se pueda reconstruir queda en el
+  resumen (`subtemas_construidos_final.sobrevivientes`).
+- La memoria de subtemas ya no guarda rótulos malos (la guarda corre antes).
+
 ### v1.52 — Operativos, allanamientos y acciones del Distrito = Positivo (2026-11-25)
 
 Regla del usuario: los operativos, allanamientos y acciones de la Alcaldía
