@@ -5,6 +5,94 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.50 — Compilaciones de titulares: solo los puntos del cliente (2026-11-25)
+
+Caso real (City TV, «Titulares», 12 noticias en una nota). El extractor la
+trataba como una sola noticia. Entraba el punto de TransMilenio (entidad
+adscrita), el mínimo de caracteres se completaba con el punto de la toma de
+rehenes y el punto del cliente quedaba a medias. Con ese texto el subtema
+salió «Afectación de TransMilenio por protestas».
+
+- `contexto_cliente.partir_compilacion` reconoce las compilaciones:
+  - una lista numerada (1., 2., 3., …) o con viñetas que arranca al comienzo
+    del cuerpo;
+  - un titular de compilación («Titulares», «Resumen de noticias»,
+    «Noticiero»…) con 3+ párrafos.
+
+  Una lista dentro de una noticia («las medidas son: 1. … 2. …») no cuenta.
+- En una compilación cada punto es una noticia. Al Contexto analizado y a
+  «texto» entran solo los puntos COMPLETOS que nombran a la marca, sus alias,
+  sus voceros o la Alcaldía. Si ningún punto lo hace, entran los de entidades
+  adscritas. El mínimo de caracteres nunca se completa con otros puntos.
+- Esos puntos son también el cuerpo con el que la nota se compara, se agrupa
+  y se valora (`_texto_fila`). El tono y el subtema salen solo de lo que la
+  nota dice del cliente.
+
+### v1.49 — Columna texto más limpia, menciones ajenas fuera y mismo hecho al evaluador (2026-11-25)
+
+Auditoría nota por nota del dossier del 2026-11-25.
+
+- **Orden del xlsx del boletín**: «Resumen - Aclaracion» va donde estaba
+  «texto» (después de «Link Nota») y «texto» donde estaba el Resumen
+  (después de «Contexto analizado»). El contenido no cambia.
+- **Extracto del cliente (Contexto analizado y texto)**: ya no cuentan como
+  mención del cliente:
+  - el secretario general de otra entidad («de las Naciones Unidas»);
+  - los exalcaldes y el cargo en pasado («el alcalde mayor Samuel Moreno»,
+    «el alcalde (Samuel Moreno)», «destituido como alcalde de Bogotá»,
+    «cuando fungía como alcalde», «llegó a convertirse en alcalde»);
+  - otra persona en la Alcaldía («asesor de Petro en la Alcaldía de
+    Bogotá») y el contexto electoral («suena para la alcaldía de Bogotá»).
+
+  La misma oración repetida en el cuerpo entra una sola vez. «texto» ya no
+  empieza con el cierre suelto de un titular en pregunta («? Es
+  importante…»). El relleno hasta 15 palabras se toma sin las plantillas del
+  medio.
+- **Mismo hecho con subtemas distintos** (caso alumbrado: «Cambio de
+  operador…», «Nuevo modelo…», «Nuevo operador del alumbrado público»): el
+  evaluador de agrupación (modo Claude Haiku) también recibe las notas cuyos
+  subtemas comparten el núcleo del asunto (2+ raíces de contenido, una de
+  ellas poco común en el dossier), aunque sus textos se parezcan poco. El
+  agente decide agrupar o separar. Lo que agrupa cuenta como una sola
+  noticia también para la memoria y la hoja del boletín.
+
+### v1.48 — Plantillas del medio fuera del texto y guarda final de subtema (2026-11-25)
+
+Caso real del 2026-11-25: la nota 62149319 (concurso «Navidad en palabras e
+imágenes», Pulzo) quedó con el subtema «Declaratoria alerta ambiental Fase 1
+suroccidente», igual que otras 8 notas sin relación (escombros, Salsa al
+Parque, ahorro de energía, cortes de luz).
+
+Causa: todas las notas de Pulzo arrancan con el mismo encabezado («Bogotá
+cuenta con un espacio de información muy completo […] principales noticias
+de la Administración Distrital»). El extractor tomaba «Administración
+Distrital» como alusión al cliente y metía esa frase en el Contexto
+analizado y en la columna «texto». El pase de la misma nota (v1.46) vio ese
+pasaje literal en 6 notas de Pulzo y las unió, y por encadenamiento arrastró
+la versión de Bogota.gov.co, Colombinews y Dxtcapital de cada una: 12 notas
+de 6 noticias en un solo subtema. La fidelidad final (v1.13) ya no lo
+frenaba porque los pases v1.44-v1.47 corren después de ella.
+
+- **Plantillas del medio** (`contexto_cliente.oraciones_plantilla`,
+  `quitar_plantillas`): una oración que se repite en notas distintas del
+  mismo medio (3+ notas, o 2 que fuera de ella casi no comparten texto) es
+  encabezado o pie del medio, igual que las plantillas conocidas (Pulzo,
+  «artículo curado con IA», Portal Bogotá). No cuenta como mención del
+  cliente, no entra al Contexto analizado ni a «texto» y no cuenta para
+  comparar notas. Las versiones impresa y web de la misma nota no se tocan.
+- **Misma nota sin encadenar** (`unificar_misma_nota_final`): además del
+  pasaje compartido, las dos notas deben parecerse de verdad (coseno ≥ 0,30;
+  notas distintas de Pulzo ≈ 0,10, la misma noticia en dos medios ≈
+  0,46-0,99) y un bloque solo se une a otro si se parecen en promedio. Los
+  fragmentos repetidos en 3+ notas del mismo medio no cuentan. Entre gemelas
+  solo compiten rótulos fieles a todas.
+- **Guarda final de subtema** (`guarda_final_subtema_fiel`): es el último
+  pase. Si el subtema de una nota cambió después del volcado y no es fiel a
+  su título, cuerpo y Contexto analizado, la nota recupera el subtema que
+  tenía al volcar. Las correcciones manuales de la hoja y los rótulos
+  políticos no se tocan. El resumen lo informa en
+  `subtemas_restituidos_por_fidelidad`.
+
 ### v1.45 — Gestiones, anuncios y respuestas con acción del Distrito = Positivo (2026-11-21)
 
 Criterio del usuario: muchas acciones, gestiones, ayudas y programas de la
