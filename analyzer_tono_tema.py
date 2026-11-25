@@ -504,9 +504,12 @@ def detector_cliente(brand: str, aliases: Sequence[str] = (), voceros: Sequence[
         enmascarar=(lambda t: _enmascarar_menciones_ajenas(t, vz)) if distrito else None)
 
 
-def _fuente_contexto(row: dict, km: dict, det) -> str:
+def _fuente_contexto(row: dict, km: dict, det, plantillas: Optional[set] = None) -> str:
     """CuerpoEs si nombra al cliente; si no, el primer texto de la fila que
-    sí lo nombre; si ninguno, el más largo."""
+    sí lo nombre; si ninguno, el más largo. v1.48: sin las oraciones de
+    plantilla del medio (una plantilla que nombra a la «Administración
+    Distrital» no es una mención del cliente)."""
+    import contexto_cliente as _cc
     candidatos = [row.get('CuerpoEs'), row.get('Cuerpo'), row.get('Texto'),
                   row.get('Texto completo'), row.get('Resumen - Aclaracion'),
                   row.get('resumen corto'), row.get('Resumen'),
@@ -514,6 +517,7 @@ def _fuente_contexto(row: dict, km: dict, det) -> str:
     textos = [str(v) for v in candidatos
               if v is not None and not (isinstance(v, float) and v != v)
               and str(v).strip() and str(v).strip().lower() != 'nan']
+    textos = [t for t in (_cc.quitar_plantillas(t, plantillas) for t in textos) if t.strip()]
     if not textos:
         return ''
     for t in textos:
@@ -522,17 +526,19 @@ def _fuente_contexto(row: dict, km: dict, det) -> str:
     return max(textos, key=len)
 
 
-def contexto_por_segmentos(row: dict, km: dict, det) -> Tuple[str, dict]:
+def contexto_por_segmentos(row: dict, km: dict, det,
+                           plantillas: Optional[set] = None) -> Tuple[str, dict]:
     """(Contexto analizado, meta) de una fila. El contexto es el Título
     (cuando nombra al cliente) + los segmentos del cuerpo con menciones, con
     al menos MIN_CONTEXTO_CARACTERES. Sin mención en el cuerpo se usa la
     entrada de la noticia (3 oraciones), como antes."""
     import contexto_cliente as _cc
     titulo = _titulo_fila(row, km)
-    fuente = _fuente_contexto(row, km, det)
+    fuente = _fuente_contexto(row, km, det, plantillas)
     meta = _cc.construir(
         fuente, titulo, det,
-        tipo_medio=str(row.get(km.get('tipodemedio', 'Tipo de Medio'), '') or ''))
+        tipo_medio=str(row.get(km.get('tipodemedio', 'Tipo de Medio'), '') or ''),
+        plantillas=plantillas)
     titulo_limpio = (titulo or '').strip()
     base = meta['contexto'] or _contexto_minimo_util('', titulo, _cc.limpiar(fuente))
     prefijo = ''
@@ -541,6 +547,26 @@ def contexto_por_segmentos(row: dict, km: dict, det) -> Tuple[str, dict]:
     ctx = _extender_a_minimo(prefijo, base, _cc.limpiar(fuente), titulo_limpio)
     meta['mencion_cliente'] = bool(meta['titulo_menciona'] or meta['oraciones_con_mencion'])
     return ctx, meta
+
+
+def quitar_plantillas_del_dossier(rows: List[dict], km: dict) -> set:
+    """v1.48: detecta las oraciones de plantilla de cada medio en el dossier
+    (`contexto_cliente.oraciones_plantilla`) y deja en cada fila afectada
+    `_cuerpo_sin_plantilla`, que `_texto_fila` usa para comparar notas. No
+    toca ninguna columna de salida. Devuelve el conjunto de plantillas."""
+    import contexto_cliente as _cc
+    mk = km.get('medio', 'Medio')
+    filas = [i for i, r in enumerate(rows) if not r.get('is_duplicate')]
+    for i in filas:
+        rows[i].pop('_cuerpo_sin_plantilla', None)
+    cuerpos = {i: _texto_fila(rows[i], km) for i in filas}
+    plantillas = _cc.oraciones_plantilla(
+        [(familia_medio(rows[i].get(mk) or rows[i].get('Medio')), cuerpos[i]) for i in filas])
+    for i in filas:
+        limpio = _cc.quitar_plantillas(cuerpos[i], plantillas)
+        if limpio != cuerpos[i] and limpio.strip():
+            rows[i]['_cuerpo_sin_plantilla'] = limpio
+    return plantillas
 
 
 BASE_URL_DEFECTO = "https://api.openai.com/v1"
@@ -671,6 +697,12 @@ def _texto_fila(row: dict, km: dict) -> str:
     hacía que el tono se decidiera por el titular y por el tono general de la
     nota, no por el párrafo donde aparece la marca.
     """
+    # v1.48: sin las oraciones de plantilla del medio (se fija en
+    # enrich_rows_with_ai), para que el relleno no haga parecer iguales dos
+    # notas distintas del mismo medio.
+    limpio = row.get('_cuerpo_sin_plantilla')
+    if isinstance(limpio, str) and limpio.strip():
+        return limpio
     candidatos = [
         row.get('CuerpoEs'), row.get('Cuerpo'), row.get('Texto'),
         row.get('Texto completo'), row.get('Resumen - Aclaracion'),
@@ -9333,13 +9365,18 @@ def enrich_rows_with_ai(
     # Alcaldía, el alcalde por su cargo y las secretarías y entidades adscritas.
     det_cliente = detector_cliente(brand, aliases, cfg.get('voceros') or [],
                                    distrito=bool(cfg.get('tono_distrito_positivo')))
+    # v1.48: plantillas del medio (encabezados y pies que se repiten en
+    # notas distintas del mismo medio). No son alusiones al cliente, no
+    # entran al Contexto analizado ni cuentan para comparar notas.
+    _plantillas = quitar_plantillas_del_dossier(rows, km)
+    _ULTIMO_RESUMEN['oraciones_plantilla_medio'] = len(_plantillas)
     ctx_meta: Dict[int, dict] = {}
     for _i_fila, row in enumerate(rows):
         if row.get('is_duplicate'):
             row['Contexto analizado'] = '-'
         else:
             row['Contexto analizado'], ctx_meta[_i_fila] = contexto_por_segmentos(
-                row, km, det_cliente)
+                row, km, det_cliente, _plantillas)
     _ULTIMO_RESUMEN['contexto_segmentos'] = {
         'filas': len(ctx_meta),
         'con_mencion_en_cuerpo': sum(1 for m in ctx_meta.values() if m['oraciones_con_mencion']),
@@ -9380,6 +9417,8 @@ def enrich_rows_with_ai(
     _ULTIMO_RESUMEN.pop('subtemas_politicos', None)
     _ULTIMO_RESUMEN.pop('tono_gestion_vocero', None)
     _ULTIMO_RESUMEN.pop('subtemas_misma_nota_unidos', None)
+    _ULTIMO_RESUMEN.pop('subtemas_restituidos_por_fidelidad', None)
+    _ULTIMO_RESUMEN.pop('oraciones_plantilla_medio', None)
     _ULTIMO_RESUMEN.pop('tono_reclamo_sin_respuesta_filas', None)
     _ULTIMO_RESUMEN.pop('tono_reclamo_sin_respuesta', None)
     _ULTIMO_RESUMEN.pop('correcciones_sheets_leidas', None)
@@ -9839,6 +9878,10 @@ def enrich_rows_with_ai(
         ajustes_subtema=ajustes_fieles,
         km=km,
     )
+    # v1.48: subtema de cada fila al volcar (ya cotejado con SU nota), para
+    # la guarda final `guarda_final_subtema_fiel`.
+    for _r in rows:
+        _r['_sub_volcado'] = _r.get('Subtema_IA')
 
     # Garantía FINAL sobre las filas ya volcadas (portado de API_2_Grill
     # v4.72): la misma noticia (mismo grupo, titular, CuerpoEs o texto muy
@@ -9927,6 +9970,14 @@ def enrich_rows_with_ai(
         rows, quitar_sufijo_bogota=bool(cfg.get('tono_distrito_positivo')))
     if _formas:
         _ULTIMO_RESUMEN['subtemas_forma_unificada'] = _formas
+    # v1.48: ningún subtema llega al Excel si no corresponde a SU nota. Tras
+    # restituir, se vuelve a unir la misma nota (con rótulos fieles) y se
+    # coteja otra vez.
+    _restituidos = guarda_final_subtema_fiel(rows, km, brand, aliases)
+    if _restituidos:
+        unificar_misma_nota_final(rows, km, fijos=_fijos_rot)
+        _restituidos += guarda_final_subtema_fiel(rows, km, brand, aliases)
+        _ULTIMO_RESUMEN['subtemas_restituidos_por_fidelidad'] = _restituidos
     if cfg.get('memoria_subtemas'):
         guardar_subtemas_corrida(rows, km, brand, extra)
 
@@ -12097,6 +12148,15 @@ SHINGLE_MISMA_NOTA = 6        # palabras por fragmento
 MIN_COMPARTIDOS_MISMO_MEDIO = 12   # ≈ 17 palabras seguidas en común
 MIN_COMPARTIDOS_OTRO_MEDIO = 30    # ≈ 35 palabras seguidas en común
 MAX_DF_FRAGMENTO = 6          # fragmentos en más notas: plantilla del medio
+# v1.48 (caso Pulzo 2026-11-25): un pasaje compartido no basta. Las dos
+# notas deben parecerse de verdad (coseno del texto completo) y un bloque
+# solo se une a otro si se parecen en promedio, no por una cadena de
+# parecidos (A~B, B~C no hace que A sea C). Calibrado con el dossier real:
+# notas distintas de Pulzo con el mismo encabezado ≈ 0,10; la misma
+# noticia en dos medios ≈ 0,46-0,99.
+SIM_PISO_MISMA_NOTA = 0.30
+SIM_PROMEDIO_MISMA_NOTA = 0.30
+MAX_NOTAS_FRAGMENTO_MEDIO = 2  # un fragmento en 3+ notas del mismo medio es del medio
 
 
 def familia_medio(medio: str) -> str:
@@ -12132,9 +12192,14 @@ def unificar_misma_nota_final(rows: List[dict], km: dict, fijos=(),
         return 0
     frag = {i: _fragmentos_misma_nota(rows[i], km) for i in idx}
     df = Counter(f for i in idx for f in frag[i])
-    frag = {i: {f for f in fs if df[f] <= MAX_DF_FRAGMENTO} for i, fs in frag.items()}
     mk = km.get('medio', 'Medio')
     fam = {i: familia_medio(rows[i].get(mk) or rows[i].get('Medio')) for i in idx}
+    # v1.48: fragmentos repetidos en varias notas del MISMO medio son su
+    # encabezado o su pie, no la noticia.
+    df_medio = Counter((fam[i], f) for i in idx if fam[i] for f in frag[i])
+    frag = {i: {f for f in fs if df[f] <= MAX_DF_FRAGMENTO
+                and df_medio.get((fam[i], f), 0) <= MAX_NOTAS_FRAGMENTO_MEDIO}
+            for i, fs in frag.items()}
     par = {i: i for i in idx}
 
     def find(x):
@@ -12142,17 +12207,37 @@ def unificar_misma_nota_final(rows: List[dict], km: dict, fijos=(),
             par[x] = par[par[x]]
             x = par[x]
         return x
+    candidatos = []
     for a_i, a in enumerate(idx):
         if not frag[a]:
             continue
         for b in idx[a_i + 1:]:
-            if not frag[b] or find(a) == find(b):
+            if not frag[b]:
                 continue
             comunes = len(frag[a] & frag[b])
             umbral = MIN_COMPARTIDOS_MISMO_MEDIO if (fam[a] and fam[a] == fam[b]) \
                 else MIN_COMPARTIDOS_OTRO_MEDIO
             if comunes >= umbral:
-                par[find(b)] = find(a)
+                candidatos.append((comunes, a, b))
+    if candidatos:
+        import numpy as np
+        en_par = sorted({x for _c, a, b in candidatos for x in (a, b)})
+        pos = {i: k for k, i in enumerate(en_par)}
+        S = matriz_similitud(
+            [texto_noticia(_titulo_fila(rows[i], km), _texto_fila(rows[i], km),
+                           str(rows[i].get('Contexto analizado') or '').strip(' -'))
+             for i in en_par])
+        miembros = {i: [i] for i in en_par}
+        for _c, a, b in sorted(candidatos, key=lambda t: -t[0]):
+            ra, rb = find(a), find(b)
+            if ra == rb or float(S[pos[a], pos[b]]) < SIM_PISO_MISMA_NOTA:
+                continue
+            ia = [pos[x] for x in miembros[ra]]
+            ib = [pos[x] for x in miembros[rb]]
+            if float(S[np.ix_(ia, ib)].mean()) < SIM_PROMEDIO_MISMA_NOTA:
+                continue        # encadenado: no son la misma nota
+            par[rb] = ra
+            miembros[ra] = miembros[ra] + miembros.pop(rb)
     comp = defaultdict(list)
     for i in idx:
         comp[find(i)].append(i)
@@ -12174,6 +12259,14 @@ def unificar_misma_nota_final(rows: List[dict], km: dict, fijos=(),
             elegido = rows[fijo[0]]['Subtema_IA']
         else:
             peso = Counter(nz(rows[i]['Subtema_IA']) for i in miembros)
+            # v1.48: solo compiten los rótulos fieles a TODAS las gemelas.
+            fieles = {k for k in peso
+                      if all(_subtema_fiel_a_fila(
+                          next(rows[j]['Subtema_IA'] for j in miembros
+                               if nz(rows[j]['Subtema_IA']) == k), rows[i], km)
+                             for i in miembros)}
+            if fieles:
+                peso = Counter({k: v for k, v in peso.items() if k in fieles})
             largo = {}
             for i in miembros:
                 k = nz(rows[i]['Subtema_IA'])
@@ -12186,6 +12279,51 @@ def unificar_misma_nota_final(rows: List[dict], km: dict, fijos=(),
             if rows[i]['Subtema_IA'] != elegido:
                 rows[i]['Subtema_IA'] = elegido
                 cambios += 1
+    return cambios
+
+
+def _subtema_fiel_a_fila(sub: str, row: dict, km: dict, brand: str = '',
+                        aliases: Sequence[str] = ()) -> bool:
+    """v1.48: el subtema corresponde a ESTA nota: sus nombres propios y su
+    asunto (stems distintivos) están en el título, el cuerpo o el Contexto
+    analizado de la fila."""
+    if not str(sub or '').strip() or str(sub).strip() == '-':
+        return True
+    tit = _titulo_fila(row, km)
+    ctx = str(row.get('Contexto analizado') or '').strip(' -')
+    txt = (_texto_fila(row, km) + ' ' + ctx).strip()
+    return _etiqueta_fiel_a_texto(sub, tit, txt, brand, aliases) \
+        and _asunto_fiel_a_texto(sub, tit, txt, brand, aliases)
+
+
+def guarda_final_subtema_fiel(rows: List[dict], km: dict, brand: str = '',
+                              aliases: Sequence[str] = ()) -> List[dict]:
+    """v1.48 (caso real 2026-11-25, nota 62149319): ÚLTIMO pase sobre el
+    subtema. La fidelidad final (`aplicar_fidelidad_final_subtema`) corre
+    antes de volcar, y los pases que vinieron después (misma nota, memoria
+    y hoja del boletín, reglas políticas, forma) reescriben el subtema sin
+    volver a cotejarlo con la nota: así el concurso «Navidad en palabras e
+    imágenes» quedó con «Declaratoria alerta ambiental Fase 1 suroccidente».
+
+    Si el subtema final de una fila NO es fiel a su título, cuerpo y
+    Contexto analizado, y cambió después del volcado, la fila recupera el
+    subtema que tenía al volcar (el que el modelo y la fidelidad le dieron
+    a ESA nota). Las correcciones manuales de la hoja y los rótulos
+    políticos del perfil no se tocan. Devuelve la lista de cambios."""
+    cambios = []
+    for i, row in enumerate(rows):
+        if row.get('is_duplicate') or row.get('_correccion_manual') or row.get('_subtema_politico'):
+            continue
+        sub = str(row.get('Subtema_IA') or '').strip()
+        previo = str(row.get('_sub_volcado') or '').strip()
+        if not sub or not previo or nz(sub) == nz(previo):
+            continue
+        if _subtema_fiel_a_fila(sub, row, km, brand, aliases):
+            continue
+        row['Subtema_IA'] = previo
+        row['_subtema_restituido'] = sub
+        cambios.append({'fila': i, 'id': row.get(km.get('idnoticia', 'ID Noticia')),
+                        'quitado': sub, 'restituido': previo})
     return cambios
 
 

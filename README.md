@@ -5,6 +5,43 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.48 — Plantillas del medio fuera del texto y guarda final de subtema (2026-11-25)
+
+Caso real del 2026-11-25: la nota 62149319 (concurso «Navidad en palabras e
+imágenes», Pulzo) quedó con el subtema «Declaratoria alerta ambiental Fase 1
+suroccidente», igual que otras 8 notas sin relación (escombros, Salsa al
+Parque, ahorro de energía, cortes de luz).
+
+Causa: todas las notas de Pulzo arrancan con el mismo encabezado («Bogotá
+cuenta con un espacio de información muy completo […] principales noticias
+de la Administración Distrital»). El extractor tomaba «Administración
+Distrital» como alusión al cliente y metía esa frase en el Contexto
+analizado y en la columna «texto». El pase de la misma nota (v1.46) vio ese
+pasaje literal en 6 notas de Pulzo y las unió, y por encadenamiento arrastró
+la versión de Bogota.gov.co, Colombinews y Dxtcapital de cada una: 12 notas
+de 6 noticias en un solo subtema. La fidelidad final (v1.13) ya no lo
+frenaba porque los pases v1.44-v1.47 corren después de ella.
+
+- **Plantillas del medio** (`contexto_cliente.oraciones_plantilla`,
+  `quitar_plantillas`): una oración que se repite en notas distintas del
+  mismo medio (3+ notas, o 2 que fuera de ella casi no comparten texto) es
+  encabezado o pie del medio, igual que las plantillas conocidas (Pulzo,
+  «artículo curado con IA», Portal Bogotá). No cuenta como mención del
+  cliente, no entra al Contexto analizado ni a «texto» y no cuenta para
+  comparar notas. Las versiones impresa y web de la misma nota no se tocan.
+- **Misma nota sin encadenar** (`unificar_misma_nota_final`): además del
+  pasaje compartido, las dos notas deben parecerse de verdad (coseno ≥ 0,30;
+  notas distintas de Pulzo ≈ 0,10, la misma noticia en dos medios ≈
+  0,46-0,99) y un bloque solo se une a otro si se parecen en promedio. Los
+  fragmentos repetidos en 3+ notas del mismo medio no cuentan. Entre gemelas
+  solo compiten rótulos fieles a todas.
+- **Guarda final de subtema** (`guarda_final_subtema_fiel`): es el último
+  pase. Si el subtema de una nota cambió después del volcado y no es fiel a
+  su título, cuerpo y Contexto analizado, la nota recupera el subtema que
+  tenía al volcar. Las correcciones manuales de la hoja y los rótulos
+  políticos no se tocan. El resumen lo informa en
+  `subtemas_restituidos_por_fidelidad`.
+
 ### v1.45 — Gestiones, anuncios y respuestas con acción del Distrito = Positivo (2026-11-21)
 
 Criterio del usuario: muchas acciones, gestiones, ayudas y programas de la

@@ -94,6 +94,92 @@ def partir_oraciones(texto: str) -> List[str]:
     return out
 
 
+# ─── plantillas del medio (v1.48) ─────────────────────────────────────────
+# Caso real 2026-11-25: todas las notas de Pulzo arrancan con «Bogotá cuenta
+# con un espacio de información muy completo donde la ciudadanía […] y
+# principales noticias de la Administración Distrital». Esa frase de
+# relleno nombra a la «Administración Distrital», así que el extractor la
+# tomaba como una alusión al cliente y la metía en el Contexto analizado (y
+# en la columna «texto») de cada nota. Con eso, seis notas de Pulzo sin
+# relación (escombros, Salsa al Parque, ahorro de energía, Alerta Fase 1,
+# concurso navideño, cortes de luz) parecían «la misma nota» y quedaron con
+# un solo subtema. Una plantilla del medio no es una alusión al cliente ni
+# parte de la noticia: se quita antes de extraer y antes de comparar.
+MIN_PALABRAS_PLANTILLA = 8
+# Plantillas conocidas (sirven aunque el dossier traiga una sola nota del medio).
+_PLANTILLAS_CONOCIDAS = re.compile(
+    r'bogota cuenta con un espacio de informacion muy completo|'
+    r'pueden consultar la informacion que les interesa sobre bogota|'
+    r'este articulo fue curado con apoyo de inteligencia artificial|'
+    r'pulzo com se escribe con z|'
+    r'siga(?:nos)? (?:a|en) .{0,40}\b(?:google news|whatsapp|telegram)\b|'
+    r'unase a nuestro canal de (?:whatsapp|telegram)')
+# Dos notas del mismo medio que comparten una oración pero comparten menos
+# de esta fracción de sus oraciones no son la misma nota: esa oración es
+# del medio (encabezado o pie), no de la noticia.
+FRACCION_GEMELAS = 0.30
+
+
+def _oraciones_norm(texto: str) -> List[str]:
+    return [n for n in (nz(o) for o in partir_oraciones(texto)) if n]
+
+
+def es_plantilla(oracion: str, plantillas: Optional[set] = None) -> bool:
+    """True si la oración (cruda o normalizada) es relleno del medio."""
+    n = nz(oracion)
+    if not n:
+        return False
+    if _PLANTILLAS_CONOCIDAS.search(n):
+        return True
+    return bool(plantillas) and n in plantillas
+
+
+def oraciones_plantilla(notas: Sequence[Tuple[str, str]]) -> set:
+    """Oraciones (normalizadas) que son plantilla del medio en ESTE dossier.
+
+    `notas` = [(familia del medio, cuerpo)] de las notas no duplicadas. Una
+    oración de ≥ MIN_PALABRAS_PLANTILLA palabras es plantilla si aparece en
+    3+ notas del mismo medio, o en 2 notas del mismo medio que, fuera de
+    ella, casi no comparten oraciones (no son la versión impresa y la web de
+    la misma nota, que comparten pasajes enteros)."""
+    oraciones = [set(o for o in _oraciones_norm(c) if len(o.split()) >= MIN_PALABRAS_PLANTILLA)
+                 for _f, c in notas]
+    por_clave: Dict[Tuple[str, str], List[int]] = {}
+    for k, ((fam, _c), sents) in enumerate(zip(notas, oraciones)):
+        if not fam:
+            continue
+        for o in sents:
+            por_clave.setdefault((fam, o), []).append(k)
+    out = set()
+    for (_fam, o), ks in por_clave.items():
+        if len(ks) >= 3:
+            out.add(o)
+        elif len(ks) == 2:
+            a, b = oraciones[ks[0]], oraciones[ks[1]]
+            menor = max(1, min(len(a), len(b)))
+            if len(a & b) / menor < FRACCION_GEMELAS:
+                out.add(o)
+    return out
+
+
+def quitar_plantillas(texto: str, plantillas: Optional[set] = None) -> str:
+    """El texto sin las oraciones de plantilla del medio (párrafos en orden)."""
+    bloques = []
+    quitado = False
+    for linea in re.split(r'\r?\n', str(texto or '')):
+        if not linea.strip():
+            bloques.append('')
+            continue
+        orac = partir_oraciones(linea)
+        quedan = [o for o in orac if not es_plantilla(o, plantillas)]
+        if len(quedan) != len(orac):
+            quitado = True
+        bloques.append(' '.join(quedan))
+    if not quitado:
+        return str(texto or '')
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(bloques)).strip()
+
+
 # ─── catálogo del Distrito (Bogotá) ───────────────────────────────────────
 _SECTORES = (r'gobierno|seguridad(?: convivencia y justicia)?|movilidad|hacienda|salud|educacion|'
              r'habitat|integracion social|cultura(?: recreacion y deporte)?|ambiente|'
@@ -280,18 +366,21 @@ def _etiquetas(menc: Sequence[Tuple[str, str]]) -> List[str]:
 
 
 def construir(cuerpo: str, titulo: str, det: Detector, tipo_medio: str = '',
-              tope: Optional[int] = None) -> Dict[str, object]:
+              tope: Optional[int] = None,
+              plantillas: Optional[set] = None) -> Dict[str, object]:
     """Segmentos del cuerpo con menciones del cliente.
 
     Devuelve {'contexto', 'segmentos', 'menciones', 'categorias',
     'titulo_menciona', 'oraciones_con_mencion', 'lead'}. 'contexto' es ''
     cuando el cuerpo no nombra al cliente (quien llama decide el respaldo).
+    v1.48: las oraciones de plantilla del medio (`es_plantilla`) no son
+    alusiones al cliente ni entran al contexto.
     """
     if tope is None:
         tope = TOPE_RADIODIFUSION if nz(tipo_medio) in MEDIOS_RADIODIFUSION else TOPE_GENERAL
     tit = limpiar(titulo)
     m_tit = det.menciones(tit)
-    orac = partir_oraciones(cuerpo)
+    orac = [o for o in partir_oraciones(cuerpo) if not es_plantilla(o, plantillas)]
     lead = ' '.join(orac[:2])[:320].strip()
     vacio = {'contexto': '', 'segmentos': [],
              'menciones': _etiquetas(m_tit),
