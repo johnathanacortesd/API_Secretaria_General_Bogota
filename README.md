@@ -5,6 +5,32 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.52 — Operativos, allanamientos y acciones del Distrito = Positivo (2026-11-25)
+
+Regla del usuario: los operativos, allanamientos y acciones de la Alcaldía
+quedaban Neutro. Antes (v1.45) «operativos de control o de espacio público»
+contaban como medida restrictiva; ya no.
+
+- **Rúbrica del modelo** (`motor_haiku.RUBRICA_TONO`) y **criterio del perfil**
+  (`criterio_custom`): son gestión (Positivo) los operativos de seguridad, de
+  control o de espacio público, los allanamientos, capturas, incautaciones y
+  sellamientos y la recuperación del espacio público, aunque la Alcaldía
+  aparezca como fuente del operativo. También la respuesta con acción
+  (proceso sancionatorio al contratista). Siguen Neutro las restricciones
+  puras: pico y placa, cierres, decretos, alertas, prohibiciones y cortes.
+- **Pase final** (`gestion_distrito_positiva`):
+  - un operativo, allanamiento, captura o incautación en el titular sube si
+    el cliente aparece en el cuerpo, aunque sea como fuente;
+  - «refuerza», «nueva ruta de atención», «allanamiento», «sellamiento» y
+    «operativo» cuentan como gestión;
+  - «procedimiento/proceso sancionatorio» cuenta como respuesta con acción.
+
+  En los dos dossieres del 2026-11-25 suben: operativo en Bosa (62149323),
+  nueva ruta de atención a mujeres (62160430), IDU contra el contratista de
+  Usaquén (62152616) y la red hospitalaria (62148830).
+- **Petro como alcalde**: sigue con «Entorno Gustavo Petro» (decisión del
+  usuario).
+
 ### v1.51 — Subtema sobre Petro = Entorno político; acción del alcalde en otra ciudad = Positivo (2026-11-25)
 
 - **Petro** (`aplicar_entorno_petro`, perfil `subtemas_politicos.petro_general`):

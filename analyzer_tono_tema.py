@@ -10900,7 +10900,10 @@ _GESTION_DISTRITO_PAT = re.compile(
     r'obtiene (?:el )?(?:premio|reconocimiento)|recib(?:e|io) (?:el )?(?:premio|reconocimiento)|'
     r'destacad[oa] como|aportar(?:a|an)|pondra \d|llevar(?:a|an) \d+ (?:proyectos|iniciativas)|'
     r'subio \d+ ?%|propone (?:un )?(?:historico )?aumento|'
-    r'(?:puso|pusieron|pone|ponen|pondra|pondran) a (?:su )?disposicion)\b')
+    r'(?:puso|pusieron|pone|ponen|pondra|pondran) a (?:su )?disposicion|'
+    # v1.52: operativos y refuerzos («Bogotá refuerza la atención a mujeres»).
+    r'allan\w+|sell(?:o|aron|a|an|amiento|amientos)|operativos?|'
+    r'refuerz(?:a|an)|reforz(?:o|aron|ara)|nuevas? rutas? de (?:atencion|apoyo))\b')
 _ANUNCIO_DISTRITO_PAT = re.compile(
     r'\b(?:anunci\w*|present\w*|abre|abrio|abren|abrira|convoc\w*|tendra|tendran|llega|llegan|'
     r'llegara|reunira|reunio|realiza|realizara|realizo|celebra|celebrara|organiza|organizo|habra|lanza|'
@@ -10923,14 +10926,17 @@ _RESPUESTA_ACCION_PAT = re.compile(
     r'captur(?:o|aron)|recuper(?:o|aron)|'
     # v1.51: «puso a disposición la red pública hospitalaria».
     r'(?:puso|pusieron|pone|ponen|pondra|pondran) a (?:su )?disposicion|'
+    # v1.52: proceso sancionatorio contra el contratista (IDU, obras de Usaquén).
+    r'(?:procedimiento|proceso)(?: administrativo)? sancion\w*|'
     r'ofrec(?:io|ieron) (?:la |el |los |las |su |sus )?(?:red|apoyo|ayuda|hospitales|recursos|'
     r'equipos|maquinaria|bomberos|personal))\b')
 # Medidas, alertas y restricciones: Neutro (criterio del usuario).
 _MEDIDA_NEUTRA_PAT = re.compile(
     r'\b(?:alertas?|restriccion\w*|restring\w*|pico y placa|cierres?|cierra|cerrad[oa]s?|'
     r'prohib\w*|decretos?|resolucion|ley seca|toque de queda|parrillero|comparendos?|'
-    r'operativos? de (?:control|espacio publico|recuperacion del espacio publico)|'
-    r'espacio publico|desalojo|sellamiento|cortes? de (?:luz|agua|energia)|racionamiento|'
+    # v1.52: los operativos, la recuperación del espacio público y los
+    # sellamientos ya no son medidas: son gestión (Positivo).
+    r'desalojo|cortes? de (?:luz|agua|energia)|racionamiento|'
     r'medidas (?:de ahorro|restrictivas|de movilidad|para ingresar)|plan retorno|'
     r'calidad del aire|contaminacion)\b')
 
@@ -10946,6 +10952,10 @@ def _actor_distrito_en(oracion_nz: str, det) -> bool:
     return bool(m and (_GESTION_DISTRITO_PAT.search(m.group(1)) or _ANUNCIO_DISTRITO_PAT.search(m.group(1))))
 
 
+_OPERATIVO_TITULAR_PAT = re.compile(
+    r'\b(?:operativos?|allanamientos?|allan(?:a|o|an|aron)|captur(?:a|o|an|aron|ados?|adas?)|'
+    r'incaut(?:a|o|an|aron|acion\w*)|desarticul\w+|desmantel\w+|sell(?:a|o|an|aron|amientos?)|'
+    r'recuper(?:a|o|an|aron|acion) (?:de )?(?:el |la )?(?:espacio publico|predios?|lotes?|parques?))\b')
 _FUENTE_SOLO_PAT = re.compile(r'\b(?:segun|de acuerdo con|citad[oa] por|inform[oa]cion (?:de|proporcionada por))\b')
 _OTRA_CIUDAD_CACHE = []
 
@@ -10984,6 +10994,13 @@ def gestion_distrito_positiva(titulo: str, texto: str = '', det=None,
     # de esa ciudad): «el alcalde de Bogotá, Carlos Fernando Galán, puso a
     # disposición la red pública hospitalaria».
     otra_ciudad = _titular_de_otra_ciudad(tit)
+    # v1.52 (regla del usuario 2026-11-25): un operativo, allanamiento,
+    # captura o incautación en el titular es gestión del Distrito si el
+    # cliente aparece en el cuerpo, aunque sea como fuente del operativo
+    # («De acuerdo con la Alcaldía… las autoridades ubicaron dos inmuebles»).
+    if not otra_ciudad and _OPERATIVO_TITULAR_PAT.search(tit) and det is not None and any(
+            det.menciones(o) for o in re.split(r'(?<=[.;!?])\s+|\n+|\s\[…\]\s', ctrl(texto or '')) if o.strip()):
+        return True
     # Figura ajena en el titular (perfil `tono_neutro_titulo`, p. ej. Petro)
     # sin un vocero propio: la nota trata de esa figura (regla de siempre).
     propios = [nz(v) for v in (voceros or []) if v and str(v)[:1].isupper() and len(nz(v)) >= 4]
