@@ -1775,7 +1775,7 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
                     # LITERALES del Resumen - Aclaracion (sin inventar).
                     # v1.49: el relleno se toma sin las plantillas del
                     # medio (encabezados y pies que no son la noticia).
-                    _res_v = row.get("_cuerpo_sin_plantilla") or \
+                    _res_v = row.get("_cuerpo_cliente") or row.get("_cuerpo_sin_plantilla") or \
                         quitar_plantillas(str(row.get("Resumen - Aclaracion") or ""))
                     base = texto_con_minimo(base, _res_v, str(tit_v or ""))
                     if base:

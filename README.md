@@ -5,6 +5,29 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.50 — Compilaciones de titulares: solo los puntos del cliente (2026-11-25)
+
+Caso real (City TV, «Titulares», 12 noticias en una nota). El extractor la
+trataba como una sola noticia. Entraba el punto de TransMilenio (entidad
+adscrita), el mínimo de caracteres se completaba con el punto de la toma de
+rehenes y el punto del cliente quedaba a medias. Con ese texto el subtema
+salió «Afectación de TransMilenio por protestas».
+
+- `contexto_cliente.partir_compilacion` reconoce las compilaciones:
+  - una lista numerada (1., 2., 3., …) o con viñetas que arranca al comienzo
+    del cuerpo;
+  - un titular de compilación («Titulares», «Resumen de noticias»,
+    «Noticiero»…) con 3+ párrafos.
+
+  Una lista dentro de una noticia («las medidas son: 1. … 2. …») no cuenta.
+- En una compilación cada punto es una noticia. Al Contexto analizado y a
+  «texto» entran solo los puntos COMPLETOS que nombran a la marca, sus alias,
+  sus voceros o la Alcaldía. Si ningún punto lo hace, entran los de entidades
+  adscritas. El mínimo de caracteres nunca se completa con otros puntos.
+- Esos puntos son también el cuerpo con el que la nota se compara, se agrupa
+  y se valora (`_texto_fila`). El tono y el subtema salen solo de lo que la
+  nota dice del cliente.
+
 ### v1.49 — Columna texto más limpia, menciones ajenas fuera y mismo hecho al evaluador (2026-11-25)
 
 Auditoría nota por nota del dossier del 2026-11-25.

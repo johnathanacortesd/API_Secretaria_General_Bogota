@@ -365,6 +365,101 @@ def _etiquetas(menc: Sequence[Tuple[str, str]]) -> List[str]:
     return out
 
 
+# ─── compilaciones de titulares (v1.50) ───────────────────────────────────
+# Caso real 2026-11-25 (City TV, «Titulares»): el cuerpo es una lista de 12
+# noticias independientes («1. Once horas completa la toma de rehenes… 9. La
+# reina de Dinamarca se encuentra en Bogotá, donde se reunió con el alcalde
+# Carlos Fernando Galán…»). Se trataba como UNA noticia: entraba el punto de
+# TransMilenio (entidad adscrita), el mínimo de caracteres se completaba con
+# el punto de los rehenes y el punto 9 quedaba a medias. Con ese texto el
+# subtema salió «Afectación de TransMilenio por protestas». En una
+# compilación cada punto es una noticia: solo entran los puntos COMPLETOS que
+# nombran a la marca, sus alias, sus voceros o la Alcaldía; nunca otros.
+_TITULO_COMPILACION = re.compile(
+    r'^(?:los |las )?(?:titulares|titular(?:es)? del dia|resumen de (?:noticias|titulares)|'
+    r'noticias (?:de|del|en) (?:la|el) (?:manana|tarde|noche|dia|hora)|'
+    r'lo (?:mas )?importante|panorama informativo|avances? informativos?|'
+    r'boletin(?: informativo)?|noticiero|primera emision|ultima hora)\b')
+_MARCA_ITEM = re.compile(r'(?:^|(?<=\s))(\d{1,2})\s?[.)]\s+(?=[^\s\d])')
+_VINETA = re.compile(r'^\s*[•·▪●◦\-–—*]\s+')
+MIN_ITEMS = 3
+CATEGORIAS_FUERTES = ('marca', 'vocero', 'distrito')
+
+
+def partir_compilacion(texto: str, titulo: str = '') -> List[str]:
+    """Puntos de una compilación de noticias, o [] si el texto es una sola
+    noticia. Es compilación: una lista numerada (1., 2., 3., …) o con viñetas
+    que arranca al comienzo del cuerpo, o un titular de compilación
+    («Titulares», «Resumen de noticias») con 3+ párrafos. Una lista dentro de
+    una noticia («las medidas son: 1. … 2. …») no arranca al comienzo y no
+    cuenta."""
+    t = limpiar(texto)
+    if not t:
+        return []
+    # Numerada: 1, 2, 3… consecutivos y el 1 al comienzo del cuerpo.
+    marcas, esperado = [], 1
+    for m in _MARCA_ITEM.finditer(t):
+        if int(m.group(1)) == esperado:
+            if esperado == 1 and t[:m.start()].strip():
+                break
+            marcas.append(m)
+            esperado += 1
+    if len(marcas) >= MIN_ITEMS:
+        items = []
+        for k, m in enumerate(marcas):
+            fin = marcas[k + 1].start() if k + 1 < len(marcas) else len(t)
+            items.append(t[m.end():fin].strip())
+        return [x for x in items if x]
+    lineas = [x.strip() for x in re.split(r'\r?\n+', t) if x.strip()]
+    if len(lineas) >= MIN_ITEMS and _VINETA.match(lineas[0]) and \
+            sum(1 for x in lineas if _VINETA.match(x)) >= MIN_ITEMS:
+        return [_VINETA.sub('', x).strip() for x in lineas if _VINETA.match(x)]
+    if _TITULO_COMPILACION.match(nz(titulo)):
+        parrafos = [x.strip() for x in re.split(r'\r?\n\s*\n', t) if x.strip()]
+        if len(parrafos) < MIN_ITEMS:
+            parrafos = lineas
+        if len(parrafos) >= MIN_ITEMS:
+            return parrafos
+    return []
+
+
+def _construir_compilacion(items: List[str], titulo: str, det: 'Detector', tope: int,
+                           plantillas: Optional[set]) -> Dict[str, object]:
+    tit = limpiar(titulo)
+    m_tit = det.menciones(tit)
+    por_item = []
+    for it in items:
+        orac = [o for o in partir_oraciones(it) if not es_plantilla(o, plantillas)]
+        texto = ' '.join(orac).strip()
+        ms = []
+        for o in orac:
+            for par in det.menciones(o):
+                if par not in ms:
+                    ms.append(par)
+        por_item.append((texto, ms))
+    fuertes = [k for k, (_t, ms) in enumerate(por_item) if any(c in CATEGORIAS_FUERTES for c, _ in ms)]
+    # Sin marca, vocero ni Alcaldía en ningún punto: los de entidades adscritas.
+    elegidos = fuertes or [k for k, (_t, ms) in enumerate(por_item) if ms]
+    partes, usado = [], 0
+    for k in elegidos:
+        txt = por_item[k][0]
+        costo = len(txt) + (len(SEPARADOR) if partes else 0)
+        if partes and usado + costo > tope:
+            break
+        partes.append(txt[:tope] if not partes else txt)
+        usado += costo
+    menc: List[Tuple[str, str]] = list(m_tit)
+    for k in elegidos:
+        for par in por_item[k][1]:
+            if par not in menc:
+                menc.append(par)
+    return {'contexto': SEPARADOR.join(partes).strip(), 'segmentos': partes,
+            'menciones': _etiquetas(menc), 'categorias': sorted({c for c, _ in menc}),
+            'titulo_menciona': bool(m_tit), 'oraciones_con_mencion': len(elegidos),
+            'lead': (items[0] if items else '')[:320], 'compilacion': len(items),
+            'cuerpo_cliente': '\n\n'.join(por_item[k][0] for k in elegidos)}
+
+
 def construir(cuerpo: str, titulo: str, det: Detector, tipo_medio: str = '',
               tope: Optional[int] = None,
               plantillas: Optional[set] = None) -> Dict[str, object]:
@@ -378,6 +473,10 @@ def construir(cuerpo: str, titulo: str, det: Detector, tipo_medio: str = '',
     """
     if tope is None:
         tope = TOPE_RADIODIFUSION if nz(tipo_medio) in MEDIOS_RADIODIFUSION else TOPE_GENERAL
+    # v1.50: compilación de titulares => solo los puntos del cliente.
+    items = partir_compilacion(cuerpo, titulo) if det.activo() else []
+    if items:
+        return _construir_compilacion(items, titulo, det, tope, plantillas)
     tit = limpiar(titulo)
     m_tit = det.menciones(tit)
     orac = [o for o in partir_oraciones(cuerpo) if not es_plantilla(o, plantillas)]

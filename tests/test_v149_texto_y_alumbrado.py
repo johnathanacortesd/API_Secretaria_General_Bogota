@@ -76,3 +76,44 @@ def test_mismo_asunto_con_subtemas_distintos_es_candidato():
     assert [0, 1] not in sin['comps'] and [0, 1] in con['comps']
     # Un solo núcleo compartido no basta («pico» y «placa» con «cierre de vías»: nada).
     assert not any(2 in c and 3 in c for c in con['comps'])
+
+
+# ─── v1.50: compilación de titulares (City TV «Titulares», 2026-11-25) ──────
+TITULARES = (
+    '1. Once horas completa la toma de rehenes en un almacén Éxito de Cartagena. Hombres armados '
+    'retuvieron a cerca de 30 personas.\n\n'
+    '2. A esta hora, unidades élite de la Policía Nacional mantienen rodeado el almacén. Dos '
+    'negociadores están cara a cara con los delincuentes para buscar una salida segura.\n\n'
+    '3. A diez años de la firma del Acuerdo de Paz, el secretario general de las Naciones Unidas '
+    'reconoció los avances alcanzados.\n\n'
+    '4. Más de 63.000 usuarios de TransMilenio resultaron afectados por las protestas en la avenida '
+    'Caracas. El portal estuvo cerrado durante varios minutos.\n\n'
+    '5. La reina de Dinamarca se encuentra en Bogotá, donde se reunió con el alcalde Carlos Fernando '
+    'Galán y el vicepresidente José Manuel Restrepo. La monarca continuará su recorrido por el país '
+    'con una agenda de cooperación en salud, energía y medio ambiente.\n\n'
+    '6. Shakira anunció una millonaria donación destinada a la educación de los niños.')
+REINA = ('La reina de Dinamarca se encuentra en Bogotá, donde se reunió con el alcalde Carlos Fernando '
+         'Galán y el vicepresidente José Manuel Restrepo. La monarca continuará su recorrido por el país '
+         'con una agenda de cooperación en salud, energía y medio ambiente.')
+
+
+def test_titulares_solo_el_punto_del_cliente_completo():
+    km = {'titulo': 'Título', 'resumen': 'Resumen - Aclaracion', 'tipodemedio': 'Tipo de Medio'}
+    row = {'Título': 'Titulares', 'CuerpoEs': TITULARES, 'Resumen - Aclaracion': TITULARES,
+           'Tipo de Medio': 'Televisión'}
+    ctx, meta = az.contexto_por_segmentos(row, km, DET)
+    assert texto_sin_titulo(ctx, 'Titulares') == REINA
+    # Ese punto es el cuerpo con el que se compara, agrupa y valora la nota.
+    assert az._texto_fila(row, km) == REINA
+
+
+def test_lista_dentro_de_una_noticia_no_es_compilacion():
+    nota = ('La Alcaldía de Bogotá anunció tres medidas para el puente festivo: 1. Pico y placa '
+            'regional en las salidas. 2. Más agentes de tránsito en los peajes. 3. Cierre de la '
+            'carrera Séptima el domingo.')
+    assert cc.partir_compilacion(nota, 'Medidas para el puente festivo') == []
+    assert len(cc.partir_compilacion(TITULARES, 'Titulares')) == 6
+    # Un titular de compilación con párrafos sin numerar también se parte.
+    sin_num = '\n\n'.join(x.split('. ', 1)[1] for x in TITULARES.split('\n\n'))
+    assert len(cc.partir_compilacion(sin_num, 'Titulares')) == 6
+    assert cc.partir_compilacion(sin_num, 'La reina de Dinamarca visitó Bogotá') == []

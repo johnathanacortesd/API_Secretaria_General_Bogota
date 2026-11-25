@@ -540,6 +540,13 @@ def contexto_por_segmentos(row: dict, km: dict, det,
         tipo_medio=str(row.get(km.get('tipodemedio', 'Tipo de Medio'), '') or ''),
         plantillas=plantillas)
     titulo_limpio = (titulo or '').strip()
+    # v1.50: en una compilación de titulares solo cuentan los puntos del
+    # cliente: el mínimo de caracteres no se completa con otras noticias, y
+    # esos puntos son el cuerpo con el que se compara, agrupa y valora la nota.
+    row.pop('_cuerpo_cliente', None)
+    if meta.get('compilacion') and meta.get('cuerpo_cliente'):
+        fuente = str(meta['cuerpo_cliente'])
+        row['_cuerpo_cliente'] = fuente
     base = meta['contexto'] or _contexto_minimo_util('', titulo, _cc.limpiar(fuente))
     prefijo = ''
     if titulo_limpio and titulo_limpio not in base and meta['titulo_menciona']:
@@ -700,9 +707,10 @@ def _texto_fila(row: dict, km: dict) -> str:
     # v1.48: sin las oraciones de plantilla del medio (se fija en
     # enrich_rows_with_ai), para que el relleno no haga parecer iguales dos
     # notas distintas del mismo medio.
-    limpio = row.get('_cuerpo_sin_plantilla')
-    if isinstance(limpio, str) and limpio.strip():
-        return limpio
+    for clave in ('_cuerpo_cliente', '_cuerpo_sin_plantilla'):
+        limpio = row.get(clave)
+        if isinstance(limpio, str) and limpio.strip():
+            return limpio
     candidatos = [
         row.get('CuerpoEs'), row.get('Cuerpo'), row.get('Texto'),
         row.get('Texto completo'), row.get('Resumen - Aclaracion'),
