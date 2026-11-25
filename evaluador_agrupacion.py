@@ -85,9 +85,43 @@ def _n(s: str) -> str:
 # unidad. Así el evaluador también puede separar notas que la agrupación
 # determinista puso en el mismo grupo por un titular parecido.
 
+# v1.49 (caso alumbrado 2026-11-25): diez notas de EPM y el alumbrado
+# público de Bogotá, redactadas de forma distinta (y una en inglés), quedaron
+# con tres subtemas («Cambio de operador del alumbrado público», «Nuevo
+# modelo de alumbrado público», «Nuevo operador del alumbrado público»).
+# Sus textos se parecen poco (coseno 0,0-0,3), así que nunca llegaban juntas
+# al evaluador. Ahora también son candidatas las notas cuyos subtemas
+# comparten el núcleo del asunto (2+ raíces de contenido) con al menos una
+# raíz poco común en el dossier. El agente decide agrupar o separar: un
+# candidato no une nada por sí solo.
+_VACIAS_SUBTEMA = set("""
+a al ante con contra de del desde durante e el en entre hacia hasta la las lo los para por
+segun sin sobre tras un una unos unas y o u
+bogota distrito distrital alcaldia alcalde ciudad capital nuevo nueva nuevos nuevas
+enero febrero marzo abril mayo junio julio agosto septiembre setiembre octubre noviembre
+diciembre lunes martes miercoles jueves viernes sabado domingo hoy manana semana
+""".split())
+MIN_RAICES_NUCLEO = 2
+FRACCION_RARA = 0.12      # raíz en <= 12 % de las notas (mínimo 3) = distintiva
+
+
+def _raiz_sub(w: str) -> str:
+    for suf in ('es', 's'):
+        if len(w) > 4 and w.endswith(suf):
+            return w[:-len(suf)]
+    return w
+
+
+def nucleo_subtema(sub: str) -> set:
+    """Raíces de contenido de un subtema (sin vacías ni palabras del Distrito)."""
+    return {_raiz_sub(w) for w in _n(sub).split()
+            if len(w) > 2 and w not in _VACIAS_SUBTEMA and not w.isdigit()}
+
+
 def construir_candidatos(rows: List[dict], mapa: Dict[int, int], km: dict,
                          umbral_titulo: int = 92, umbral_cuerpo: int = 85,
-                         margen: int = MARGEN_CANDIDATO) -> Dict[str, Any]:
+                         margen: int = MARGEN_CANDIDATO,
+                         etiquetas: Optional[Dict[int, dict]] = None) -> Dict[str, Any]:
     """{"comps": [[unidad…] >=2], "miembros": {unidad: [filas]}}. Enlaza
     las notas del mismo grupo determinista y las de grupos distintos con
     Título, Resumen - Aclaración, texto o Contexto analizado parecidos
@@ -140,6 +174,28 @@ def construir_candidatos(rows: List[dict], mapa: Dict[int, int], km: dict,
         for i, j in mh.pares_similares([rep[u][campo] for u in us], umbral / 100.0,
                                        minimo=minimo, scorer="token_set_ratio"):
             padre[raiz(us[i])] = raiz(us[j])
+    # v1.49: subtemas con el mismo núcleo del asunto (ver nucleo_subtema).
+    if etiquetas:
+        nuc = {u: nucleo_subtema((etiquetas.get(rep[u]["g"]) or {}).get("sub_tema")
+                                 or (etiquetas.get(rep[u]["g"]) or {}).get("subtema") or "")
+               for u in us}
+        textos = {u: {_raiz_sub(w) for w in (rep[u]["t"] + " " + rep[u]["c"]).split()} for u in us}
+        df = Counter(w for u in us for w in textos[u])
+        tope = max(3, int(FRACCION_RARA * len(us)))
+        por_raiz: Dict[str, List[int]] = defaultdict(list)
+        for u in us:
+            for w in nuc[u]:
+                por_raiz[w].append(u)
+        for w, lista in por_raiz.items():
+            if df.get(w, 0) > tope or len(lista) < 2:
+                continue        # raíz común en el dossier: no distingue el asunto
+            for x in range(len(lista)):
+                for y in range(x + 1, len(lista)):
+                    a, b = lista[x], lista[y]
+                    if rep[a]["g"] == rep[b]["g"]:
+                        continue
+                    if len(nuc[a] & nuc[b]) >= MIN_RAICES_NUCLEO:
+                        padre[raiz(a)] = raiz(b)
     comp: Dict[int, List[int]] = defaultdict(list)
     for u in us:
         comp[raiz(u)].append(u)

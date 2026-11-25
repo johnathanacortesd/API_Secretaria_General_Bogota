@@ -9479,7 +9479,8 @@ def enrich_rows_with_ai(
     if haiku and cfg.get('evaluador_agrupacion', True):
         import evaluador_agrupacion as _ev
         progreso(76, 'Evaluador de agrupación: revisando grupos candidatos…')
-        _cands = _ev.construir_candidatos(rows, mapa, km, umbral_titulo, umbral_cuerpo)
+        _cands = _ev.construir_candidatos(rows, mapa, km, umbral_titulo, umbral_cuerpo,
+                                          etiquetas=etiquetas)
         _eval_dec = _ev.evaluar(
             _cands, rows, mapa, etiquetas, km,
             cliente={'brand': brand, 'aliases': list(aliases or []),
@@ -9911,6 +9912,15 @@ def enrich_rows_with_ai(
         # unificaciones deterministas anteriores (por grupo y por fila).
         _ULTIMO_RESUMEN['evaluador_agrupacion']['cumplimiento'] = _ev.hacer_cumplir(
             _eval_dec, _eval_estado, rows, mapa)
+        # v1.49: lo que el evaluador agrupó es UNA noticia también para la
+        # memoria y la hoja del boletín, las reglas políticas y el tono del
+        # Distrito (antes la memoria podía volver a darle a una parte el
+        # rótulo de una corrida anterior: alumbrado con tres subtemas).
+        _miem_ev = _eval_estado.get('miembros') or {}
+        for _d in _eval_dec:
+            if len(_d.get('agrupar') or []) > 1:
+                _noticias_finales.append(sorted(
+                    {i for u in _d['agrupar'] for i in _miem_ev.get(u, [u])}))
     if haiku:
         # Clausifier: guarda final de forma del subtema (modo Haiku).
         _ULTIMO_RESUMEN['subtemas_forma_final'] = guarda_final_forma_subtema(
@@ -10514,6 +10524,31 @@ _CARGO_PATS = [
                r'(?!Carlos\b|Fernando\b|Gal[aá]n\b)[A-ZÁÉÍÓÚÑ][\wáéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][\wáéíóúñ]+)?'
                r'(?:\s+en\s+la\s+' + _ALC + r')?'),
     re.compile(r'\bdesde\s+la\s+' + _ALC + r'\s+y\s+(?:\w+\s+){0,3}(?:la\s+)?Presidencia', re.I),
+    # v1.49 (auditoría del dossier 2026-11-25): exalcaldes y el cargo en
+    # pasado («destituido como alcalde de Bogotá», «cuando fungía como
+    # alcalde», «llegó a convertirse en alcalde de Bogotá»).
+    re.compile(r'\bex[\s-]?alcalde(?:sa)?s?(?:\s+mayor)?(?:\s+de\s+Bogot[aá])?', re.I),
+    re.compile(r'\b(?:destituid[oa]|inhabilitad[oa]|fung[ií]a|fue|era|siendo|elegid[oa]|'
+               r'convertirse|convirti[oó]|lleg[oó]\s+a\s+ser)\s+(?:\w+\s+){0,2}?(?:como\s+|en\s+)?'
+               r'alcalde(?:sa)?(?:\s+mayor)?(?:\s+de\s+Bogot[aá])?', re.I),
+    # Electoral: «suena para la alcaldía de Bogotá», «la contienda por la Alcaldía».
+    re.compile(r'\b(?:suena\w*|sonando|compet\w*|disput\w*|contienda|lanz\w+|llegar)\s+'
+               r'(?:\w+\s+){0,2}?(?:a|para|por)\s+la\s+' + _ALC, re.I),
+    # Otra persona en la Alcaldía («asesor jurídico de Petro en la Alcaldía de Bogotá»).
+    re.compile(r'\bde\s+(?!Carlos\b|Fernando\b|Gal[aá]n\b)[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+'
+               r'(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?\s+en\s+la\s+' + _ALC),
+    # «El alcalde mayor Samuel Moreno», «el alcalde de Bogotá, Abelardo de
+    # la Espriella»: el cargo con el nombre de otra persona.
+    re.compile(r'\b[Aa]lcalde(?:sa)?\s+(?:[Mm]ayor\s+)?(?:de\s+Bogot[aá]\s*,?\s+)?'
+               r'(?!Carlos\b|Fernando\b|Gal[aá]n\b|Mayor\b|Distrital\b|Local\b)'
+               r'[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+\s+(?:de\s+(?:la\s+)?)?[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+'),
+    # «el alcalde (Samuel Moreno)»: el nombre entre paréntesis es otro.
+    re.compile(r'\b[Aa]lcalde(?:sa)?(?:\s+[Mm]ayor)?(?:\s+de\s+Bogot[aá])?\s*\(\s*'
+               r'(?!Carlos\b|Fernando\b|Gal[aá]n\b)[A-ZÁÉÍÓÚÑ][^)]{0,40}\)'),
+    # Secretaría General de otra entidad («el secretario general de las
+    # Naciones Unidas», «del Concejo», «de la Presidencia»).
+    re.compile(r'\bsecretari[oa]\s+general\s+(?:de\s+la\s+(?!alcald|ciudad)|del\s+(?!distrito)|'
+               r'de\s+las\s+|de\s+los\s+|de\s+(?!la\b|las\b|los\b|bogot))\w+', re.I),
 ]
 _PALABRAS_NO_NOMBRE = {
     'según', 'segun', 'el', 'la', 'los', 'las', 'para', 'por', 'con', 'y', 'e', 'de', 'del',

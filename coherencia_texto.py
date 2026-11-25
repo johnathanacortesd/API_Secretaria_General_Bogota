@@ -227,7 +227,10 @@ def texto_sin_titulo(contexto: str, titulo: str) -> str:
         # como frase completa: no se corta dentro de otra palabra.
         base = re.sub(r'(?<!\w)' + re.escape(tit1) + r'(?!\w)', ' ', base)
     base = ' '.join(base.split())
-    base = re.sub(r'^[\s.,;:\-–—|"\']+', '', base)
+    # v1.49: también el cierre suelto de un titular en pregunta o
+    # exclamación («? Es importante exigirle…»): un «?», «!», «»» o «)»
+    # al comienzo nunca abre una oración.
+    base = re.sub(r'^[\s.,;:\-–—|"\'?!)\]»”’]+', '', base)
     return base.strip()
 
 

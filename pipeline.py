@@ -24,6 +24,7 @@ from unidecode import unidecode
 from analyzer_tono_tema import (enrich_rows_with_ai, ultimo_resumen, aplicar_prominencia,
                                 _quitar_nombre_la_opinion, genero_por_url, seccion_es_opinion)
 from coherencia_texto import texto_sin_titulo
+from contexto_cliente import quitar_plantillas
 from pkl_classifier import (
     apply_pkl_classifiers,
     fill_classification_context,
@@ -349,11 +350,13 @@ BOLETIN_COLUMNAS = [
     "ID Noticia", "Fecha", "Medio", "Región", "Tipo de Medio",
     "Sección - Programa", "Título", "Duración - Nro. Caracteres",
     "CPE", "Audiencia", "Tier", "Tono_IA", "Subtema_IA", "TIPO", "GÉNERO",
-    "Link Nota", "texto", "Link (Streaming - Imagen)", "Link Ext",
+    "Link Nota", "Resumen - Aclaracion", "Link (Streaming - Imagen)", "Link Ext",
     "FECHA INFORME", "HORA B",
-    "ID duplicada", "Contexto analizado", "Resumen - Aclaracion", "Audio",
+    "ID duplicada", "Contexto analizado", "texto", "Audio",
     "Web Ext"
 ]
+# v1.49 (pedido del usuario 2026-11-25): «texto» y «Resumen - Aclaracion»
+# intercambian su posición en el xlsx del boletín; el contenido no cambia.
 
 
 def columnas_boletin(include_tipo_genero=True):
@@ -1770,9 +1773,11 @@ def _write_xlsx_rows(ws, rows, km, n, step, progress, fmt_link, fmt_plain_hlink,
                     base = texto_sin_titulo(str(ctx_v), str(tit_v))
                     # v1.30: más de 15 palabras, completando con oraciones
                     # LITERALES del Resumen - Aclaracion (sin inventar).
-                    base = texto_con_minimo(base,
-                                            row.get("Resumen - Aclaracion") or "",
-                                            str(tit_v or ""))
+                    # v1.49: el relleno se toma sin las plantillas del
+                    # medio (encabezados y pies que no son la noticia).
+                    _res_v = row.get("_cuerpo_sin_plantilla") or \
+                        quitar_plantillas(str(row.get("Resumen - Aclaracion") or ""))
+                    base = texto_con_minimo(base, _res_v, str(tit_v or ""))
                     if base:
                         ws.write_string(excel_row, cidx, base)
                     else:

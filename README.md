@@ -5,6 +5,34 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.49 — Columna texto más limpia, menciones ajenas fuera y mismo hecho al evaluador (2026-11-25)
+
+Auditoría nota por nota del dossier del 2026-11-25.
+
+- **Orden del xlsx del boletín**: «Resumen - Aclaracion» va donde estaba
+  «texto» (después de «Link Nota») y «texto» donde estaba el Resumen
+  (después de «Contexto analizado»). El contenido no cambia.
+- **Extracto del cliente (Contexto analizado y texto)**: ya no cuentan como
+  mención del cliente:
+  - el secretario general de otra entidad («de las Naciones Unidas»);
+  - los exalcaldes y el cargo en pasado («el alcalde mayor Samuel Moreno»,
+    «el alcalde (Samuel Moreno)», «destituido como alcalde de Bogotá»,
+    «cuando fungía como alcalde», «llegó a convertirse en alcalde»);
+  - otra persona en la Alcaldía («asesor de Petro en la Alcaldía de
+    Bogotá») y el contexto electoral («suena para la alcaldía de Bogotá»).
+
+  La misma oración repetida en el cuerpo entra una sola vez. «texto» ya no
+  empieza con el cierre suelto de un titular en pregunta («? Es
+  importante…»). El relleno hasta 15 palabras se toma sin las plantillas del
+  medio.
+- **Mismo hecho con subtemas distintos** (caso alumbrado: «Cambio de
+  operador…», «Nuevo modelo…», «Nuevo operador del alumbrado público»): el
+  evaluador de agrupación (modo Claude Haiku) también recibe las notas cuyos
+  subtemas comparten el núcleo del asunto (2+ raíces de contenido, una de
+  ellas poco común en el dossier), aunque sus textos se parezcan poco. El
+  agente decide agrupar o separar. Lo que agrupa cuenta como una sola
+  noticia también para la memoria y la hoja del boletín.
+
 ### v1.48 — Plantillas del medio fuera del texto y guarda final de subtema (2026-11-25)
 
 Caso real del 2026-11-25: la nota 62149319 (concurso «Navidad en palabras e

@@ -427,8 +427,24 @@ def construir(cuerpo: str, titulo: str, det: Detector, tipo_medio: str = '',
         o = orac[i]
         return _ventana(o, det) if len(o) > MAX_ORACION else o
 
+    # v1.49: la misma oración repetida en el cuerpo (cable pegado dos
+    # veces, pie que repite la entrada) entra una sola vez al contexto.
+    _usadas: List[str] = []
+
+    def _repetida(i: int) -> bool:
+        n = norm[i]
+        if len(n.split()) < 6:
+            return False
+        if any(n == u or n in u or u in n for u in _usadas):
+            return True
+        _usadas.append(n)
+        return False
+
     segs = []
     for k, (a, b) in enumerate(rangos):
+        idx_vivos = [i for i in range(a, b + 1) if not _repetida(i)]
+        if not idx_vivos:
+            continue
         cats = [c for i in range(a, b + 1) for c, _ in hits.get(i, [])]
         puntos = max(PESO[c] for c in cats)
         txt_n = ' '.join(norm[a:b + 1])
@@ -438,9 +454,12 @@ def construir(cuerpo: str, titulo: str, det: Detector, tipo_medio: str = '',
             puntos += 1
         if len(tit_toks & set(txt_n.split())) >= 2:
             puntos += 1
+        hit = [j for j, i in enumerate(idx_vivos) if i in hits]
+        if not hit:
+            continue
         segs.append({'a': a, 'b': b, 'puntos': puntos,
-                     'partes': [_texto_oracion(i) for i in range(a, b + 1)],
-                     'hit': [i - a for i in range(a, b + 1) if i in hits]})
+                     'partes': [_texto_oracion(i) for i in idx_vivos],
+                     'hit': hit})
 
     # Selección por prioridad hasta el tope; el orden final es el del texto.
     elegidos: Dict[int, str] = {}
