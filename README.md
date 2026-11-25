@@ -5,6 +5,25 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.51 — Subtema sobre Petro = Entorno político; acción del alcalde en otra ciudad = Positivo (2026-11-25)
+
+- **Petro** (`aplicar_entorno_petro`, perfil `subtemas_politicos.petro_general`):
+  si el subtema final trata de Gustavo Petro («Defensa de Petro a
+  congresista Estrada», «Crítica al expresidente Gustavo Petro»), la nota es
+  **Neutro**, su subtema **«Entorno político»** y su TIPO **«Información
+  general»**. Las reglas de opinión posteriores no cambian ese TIPO. No se
+  tocan: la corrección manual de la hoja, Petro como alcalde («Entorno
+  Gustavo Petro») ni las notas donde el subtema o el titular nombran a un
+  vocero («Galán responde a Petro…»). Un perfil sin la clave nueva que tenga
+  la regla de Petro usa «Entorno político».
+- **Gestión del Distrito con titular de otra ciudad**: «Gobernadores de
+  Colombia cierran filas con el Meta tras el atentado en Villavicencio»
+  quedaba Neutro porque el titular sitúa la nota fuera de Bogotá. Su
+  subtema igual, «Bogotá pone su red hospitalaria…», sí quedaba Positivo.
+  Ahora cuenta el cuerpo, si la oración nombra al alcalde, la marca o un
+  alias (no la «Alcaldía» suelta, que puede ser la de esa ciudad). «Puso a
+  disposición» y «ofreció la red, el apoyo…» son respuesta con acción.
+
 ### v1.50 — Compilaciones de titulares: solo los puntos del cliente (2026-11-25)
 
 Caso real (City TV, «Titulares», 12 noticias en una nota). El extractor la
