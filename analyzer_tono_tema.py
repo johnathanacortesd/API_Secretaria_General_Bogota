@@ -10147,7 +10147,7 @@ def enrich_rows_with_ai(
     # clave nueva) usa «Entorno político».
     _sp_cfg = cfg.get('subtemas_politicos') or {}
     _petro_gen = aplicar_entorno_petro(
-        rows, km, _sp_cfg.get('petro_general') or ('Entorno político' if _sp_cfg.get('petro') else ''),
+        rows, km, _sp_cfg.get('petro_general') or _sp_cfg.get('petro') or '',
         voceros=cfg.get('voceros') or [], con_tipo=bool(cfg.get('clasificar_tipo_genero')))
     if _petro_gen:
         _ULTIMO_RESUMEN['subtemas_entorno_petro'] = len(_petro_gen)
@@ -12305,8 +12305,8 @@ def aplicar_entorno_petro(rows: List[dict], km: dict, rotulo: str, voceros=(),
     trata de Gustavo Petro («Defensa de Petro a congresista Estrada»,
     «Crítica al expresidente Gustavo Petro»), la nota es Neutro, su subtema
     es `rotulo` (perfil: subtemas_politicos.petro_general, «Entorno
-    político») y su TIPO «Información general». No toca: duplicadas, la
-    corrección manual de la hoja, las notas que ya llevan un rótulo político
+    Gustavo Petro» desde v1.54) y su TIPO «Información general». No toca:
+    duplicadas, las notas que ya llevan un rótulo político
     del perfil (Petro como alcalde, aspirantes) ni las notas donde el
     subtema o el titular nombran a un vocero del cliente («Galán responde a
     Petro…»: ahí la noticia es del cliente). Devuelve las filas cambiadas."""
@@ -12316,7 +12316,14 @@ def aplicar_entorno_petro(rows: List[dict], km: dict, rotulo: str, voceros=(),
     propios = [nz(v) for v in (voceros or []) if v and str(v)[:1].isupper() and len(nz(v)) >= 4]
     cambios = []
     for i, row in enumerate(rows):
-        if row.get('is_duplicate') or row.get('_correccion_manual') or row.get('_subtema_politico'):
+        # v1.54 (caso 62163985, «La vocación guerrillera del expresidente
+        # Gustavo Petro», 2026-11-25): la hoja del boletín de la 1:00 p.m.
+        # traía «Crítica al expresidente Gustavo Petro» y, leída como
+        # corrección manual, la regla no la tocaba. Un subtema que trata de
+        # Petro es «Entorno Gustavo Petro» venga de donde venga: la
+        # corrección manual ya no lo exime (sí lo eximen los rótulos del
+        # perfil y la nota cuyo subtema o titular nombra a un vocero).
+        if row.get('is_duplicate') or row.get('_subtema_politico'):
             continue
         sub = nz(row.get('Subtema_IA') or '')
         if not re.search(r'\bpetro\b', sub):
@@ -12329,6 +12336,7 @@ def aplicar_entorno_petro(rows: List[dict], km: dict, rotulo: str, voceros=(),
         if con_tipo:
             row['TIPO'] = 'Información general'
         row['_subtema_politico'] = 'petro_general'
+        row.pop('_tono_manual', None)
         cambios.append(i)
     return cambios
 

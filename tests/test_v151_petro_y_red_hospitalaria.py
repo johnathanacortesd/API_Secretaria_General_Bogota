@@ -24,12 +24,14 @@ def test_subtema_de_petro_pasa_a_entorno_politico():
              '_correccion_manual': True},
             {'Título': 'Petro alcalde', 'Subtema_IA': 'Entorno Gustavo Petro', 'Tono_IA': 'Neutro',
              '_subtema_politico': 'petro'}]
-    cambios = az.aplicar_entorno_petro(rows, KM, 'Entorno político', voceros=VOC, con_tipo=True)
-    assert cambios == [0, 1]
+    cambios = az.aplicar_entorno_petro(rows, KM, 'Entorno Gustavo Petro', voceros=VOC, con_tipo=True)
+    # v1.54: la corrección manual (fila 3) ya no exime un subtema sobre Petro.
+    assert cambios == [0, 1, 3]
     for r in rows[:2]:
-        assert (r['Tono_IA'], r['Subtema_IA'], r['TIPO']) == ('Neutro', 'Entorno político', 'Información general')
+        assert (r['Tono_IA'], r['Subtema_IA'], r['TIPO']) == ('Neutro', 'Entorno Gustavo Petro',
+                                                              'Información general')
     assert rows[2]['Subtema_IA'] == 'Respuesta de Galán a Petro por el metro'
-    assert rows[3]['Subtema_IA'] == 'Petro como exalcalde'
+    assert rows[3]['Subtema_IA'] == 'Entorno Gustavo Petro'
     assert rows[4]['Subtema_IA'] == 'Entorno Gustavo Petro'
 
 

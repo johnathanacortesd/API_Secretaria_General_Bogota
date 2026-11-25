@@ -5,6 +5,17 @@ con una función nueva en la **v1.0**: **Resumen para informe** a partir de
 un xlsx corregido.
 
 
+### v1.54 — Todo subtema sobre Petro = «Entorno Gustavo Petro» (2026-11-25)
+
+- El rótulo de los subtemas sobre Petro (`subtemas_politicos.petro_general`)
+  pasa de «Entorno político» a **«Entorno Gustavo Petro»**, el mismo de Petro
+  como alcalde.
+- `aplicar_entorno_petro` ya no exime las filas marcadas como corrección
+  manual: la hoja del boletín de la 1:00 p.m. traía «Crítica al expresidente
+  Gustavo Petro» (nota 62163985) y, leída como corrección, quedaba así en el
+  de las 6. Siguen exentas las notas cuyo subtema o titular nombran a un
+  vocero («Galán responde a Petro…»).
+
 ### v1.53 — El subtema se construye desde el texto: nada de palabras sueltas ni extractos del titular (2026-11-25)
 
 - **Guarda final** (`guarda_final_subtema_construido`, la última antes del
